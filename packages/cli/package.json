@@ -1,0 +1,23 @@
+{
+  "name": "@cordishub/cli",
+  "version": "0.1.0",
+  "description": "CordisHub terminal companion — search plugins, watch cost, replay sessions.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "cordishub": "./dist/index.js"
+  },
+  "scripts": {
+    "dev": "node --experimental-strip-types src/index.ts",
+    "build": "node ../../scripts/build.mjs"
+  },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "dependencies": {
+    "@cordishub/core": "file:../core"
+  },
+  "engines": {
+    "node": ">=22.6.0"
+  }
+}

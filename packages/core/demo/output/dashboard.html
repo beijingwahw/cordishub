@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>CordisHub · DSH Workstation</title>
+<style>
+  :root {
+    --bg: #0b0d12; --bg2: #11151c; --bg3: #1a1f2a;
+    --fg: #e6e9ef; --fg2: #9aa3b2; --fg3: #6b7384;
+    --accent: #7c5cff; --accent2: #4cb8ff; --accent4: #00d1b2;
+    --warn: #ffb86b; --err: #ff5e7e;
+    --border: #2a2f3a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", Arial; background: var(--bg); color: var(--fg); font-size: 13px; line-height: 1.5; }
+  header { padding: 14px 24px; border-bottom: 1px solid var(--border); background: var(--bg2); display: flex; align-items: center; gap: 14px; }
+  header .brand { font-weight: 600; font-size: 15px; background: linear-gradient(120deg, var(--accent), var(--accent2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header .badge { padding: 2px 8px; border-radius: 4px; background: var(--bg3); color: var(--fg2); font-size: 11px; }
+  main { padding: 24px; max-width: 1400px; margin: 0 auto; }
+  h2 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg2); margin: 28px 0 12px; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .stat { font-size: 22px; font-weight: 600; margin: 4px 0; }
+  .stat small { font-size: 11px; color: var(--fg3); font-weight: 400; margin-left: 6px; }
+  .label { color: var(--fg2); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; background: var(--bg3); color: var(--fg2); font-size: 11px; margin-right: 4px; }
+  .pill.warn { background: rgba(255,184,107,0.15); color: var(--warn); }
+  .pill.err { background: rgba(255,94,126,0.15); color: var(--err); }
+  .pill.ok { background: rgba(0,209,178,0.15); color: var(--accent4); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--fg2); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 500; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  mark { background: rgba(124,92,255,0.3); color: var(--accent); padding: 0 2px; border-radius: 2px; }
+  .timeline { border-left: 2px solid var(--border); padding-left: 16px; }
+  .timeline-item { position: relative; padding: 6px 0; }
+  .timeline-item:before { content: ''; position: absolute; left: -22px; top: 12px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+  .timeline-item.tool:before { background: var(--accent2); }
+  .timeline-item.reasoning:before { background: var(--accent4); }
+  .timeline-item.user:before { background: var(--warn); }
+  .timeline-item.system:before { background: var(--fg3); }
+  .timeline-item .ts { color: var(--fg3); font-size: 11px; margin-right: 8px; }
+  .timeline-item .src { color: var(--fg2); font-size: 11px; text-transform: uppercase; }
+  pre { background: var(--bg3); border-radius: 6px; padding: 12px; overflow-x: auto; font-size: 12px; }
+  .footer { text-align: center; color: var(--fg3); padding: 30px 0; font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">CordisHub</div>
+  <span class="badge">DSH Workstation</span>
+  <span class="badge">v0.1.0</span>
+  <span class="badge" style="margin-left:auto">everything-is-a-plugin</span>
+</header>
+<main>
+  <h2>· Live Cost Console</h2>
+  <div class="grid">
+    <div class="card">
+      <div class="label">Sessions</div>
+      <div class="stat">2<small>runs</small></div>
+    </div>
+    <div class="card">
+      <div class="label">Total Tokens</div>
+      <div class="stat">NaN<small>tokens</small></div>
+    </div>
+    <div class="card">
+      <div class="label">Total Spend</div>
+      <div class="stat">$NaN</div>
+    </div>
+    <div class="card">
+      <div class="label">Safety Violations</div>
+      <div class="stat">1<small>blocked</small></div>
+    </div>
+  </div>
+
+  <h2>· Cost Breakdown by Session</h2>
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th>Session</th><th>Model</th><th class="num">Tokens</th><th class="num">Cost (USD)</th></tr>
+      </thead>
+      <tbody>
+        
+        <tr>
+          <td><code>sess-001</code></td>
+          <td>deepseek-v4-pro</td>
+          <td class="num">5,650</td>
+          <td class="num">$0.0029</td>
+        </tr>
+        <tr>
+          <td><code>sess-002</code></td>
+          <td>deepseek-v4-pro</td>
+          <td class="num">0</td>
+          <td class="num">$0.0000</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>· Replay Lab · Timeline (sess-001)</h2>
+  <div class="card">
+    <div class="timeline">
+      
+      <div class="timeline-item system">
+        <span class="ts">#1</span>
+        <span class="src">system</span>
+        You are a senior backend engineer. Help them ship clean code.
+        
+      </div>
+      <div class="timeline-item user">
+        <span class="ts">#2</span>
+        <span class="src">user</span>
+        Refactor the billing service to be more testable.
+        
+      </div>
+      <div class="timeline-item reasoning">
+        <span class="ts">#3</span>
+        <span class="src">reasoning</span>
+        Plan: (1) read current code, (2) identify coupling, (3) propose seam interfaces, (4) write tests first.
+        
+      </div>
+      <div class="timeline-item tool">
+        <span class="ts">#4</span>
+        <span class="src">tool</span>
+        shell
+        
+      </div>
+      <div class="timeline-item reasoning">
+        <span class="ts">#5</span>
+        <span class="src">reasoning</span>
+        Found three files. Most coupling is in invoice.ts. Need to extract a PricingPolicy seam.
+        
+      </div>
+      <div class="timeline-item model">
+        <span class="ts">#6</span>
+        <span class="src">model</span>
+        I will:
+1. Create PricingPolicy seam
+2. Extract PaymentGateway interface
+3. Write contract tests first
+Let me check the file structure first.
+        <span class="pill">5,650 tok</span>
+      </div>
+    </div>
+  </div>
+
+  <h2>· Fork & Replay</h2>
+  <div class="grid-2">
+    <div class="card">
+      <div class="label">Forked Session</div>
+      <pre>{
+  "id": "sess-001-fork",
+  "model": "unknown",
+  "totalTokens": 0,
+  "label": "replan"
+}</pre>
+    </div>
+    <div class="card">
+      <div class="label">Diff (orig vs fork) at [0,3]</div>
+      <pre>{
+  "onlyInA": 0,
+  "onlyInB": 0,
+  "different": 0
+}</pre>
+    </div>
+  </div>
+
+  <h2>· Safety Net · Live Violations</h2>
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th>Kind</th><th>Severity</th><th>Detail</th><th class="num">ts</th></tr>
+      </thead>
+      <tbody>
+        
+        <tr>
+          <td><code>tool-overreach</code></td>
+          <td><span class="pill err">block</span></td>
+          <td>tool "delete_database" not in whitelist for tenant "beta-corp"</td>
+          <td class="num">01:05:13</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>· Plugin Hub · Top Plugins</h2>
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th>Plugin</th><th>Description</th><th class="num">Stars</th><th>Tags</th></tr>
+      </thead>
+      <tbody>
+        
+        <tr>
+          <td><code>deepseek-ai/dsh</code> <span class="pill ok">official</span></td>
+          <td>DeepSeek Harness：一切皆为插件。</td>
+          <td class="num">71,234</td>
+          <td><span class="pill">agent</span><span class="pill">harness</span><span class="pill">core</span></td>
+        </tr>
+        <tr>
+          <td><code>cordis-js/cordis</code></td>
+          <td>A programming paradigm for spatiotemporal composability — DSH 的底层微内核。</td>
+          <td class="num">18,234</td>
+          <td><span class="pill">kernel</span><span class="pill">microkernel</span></td>
+        </tr>
+        <tr>
+          <td><code>community/dsh-plugin-mcp-bridge</code></td>
+          <td>MCP 桥接：在 DSH 里直接接 Claude Code / Cursor / 其它 MCP 服务。</td>
+          <td class="num">6,721</td>
+          <td><span class="pill">mcp</span><span class="pill">integration</span></td>
+        </tr>
+        <tr>
+          <td><code>community/dsh-plugin-pr-review</code></td>
+          <td>审查 Pull Request，自动留 review comment、发现高风险 diff。</td>
+          <td class="num">4,521</td>
+          <td><span class="pill">git</span><span class="pill">review</span><span class="pill">code-quality</span></td>
+        </tr>
+        <tr>
+          <td><code>community/dsh-plugin-doc-gen</code></td>
+          <td>从代码生成 API 文档、OpenAPI 规范、Postman 集合。</td>
+          <td class="num">2,891</td>
+          <td><span class="pill">docs</span><span class="pill">openapi</span></td>
+        </tr>
+        <tr>
+          <td><code>community/dsh-plugin-cost-guard</code></td>
+          <td>实时 token 配额 + 峰谷路由 + 成本熔断。CordisHub 的核心组件。</td>
+          <td class="num">1,342</td>
+          <td><span class="pill">cost</span><span class="pill">observability</span><span class="pill">guard</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="footer">CordisHub · everything is a plugin · MIT</div>
+</main>
+</body>
+</html>

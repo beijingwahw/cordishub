@@ -1,0 +1,6 @@
+{"id":"sess-001","startedAt":1791162311675,"model":"deepseek-v4-pro","totalTokens":0,"totalCost":0,"meta":{"tenant":"acme-corp","run":"demo-a"}}
+{"id":"sess-001","startedAt":1791162311675,"model":"deepseek-v4-pro","totalTokens":0,"totalCost":0,"meta":{"tenant":"acme-corp","run":"demo-a"},"total_tokens":5650,"total_cost":0.002883}
+{"id":"sess-001","startedAt":1791162311675,"model":"deepseek-v4-pro","totalTokens":0,"totalCost":0,"meta":{"tenant":"acme-corp","run":"demo-a"},"total_tokens":5650,"total_cost":0.002883,"ended_at":1791162313224}
+{"id":"sess-002","startedAt":1791162313357,"model":"deepseek-v4-pro","totalTokens":0,"totalCost":0,"meta":{"tenant":"beta-corp"}}
+{"id":"sess-002","startedAt":1791162313357,"model":"deepseek-v4-pro","totalTokens":0,"totalCost":0,"meta":{"tenant":"beta-corp"},"ended_at":1791162314024}
+{"id":"sess-001-fork","startedAt":1791162314166,"model":"unknown","totalTokens":0,"totalCost":0,"meta":{"forkedFrom":{"sessionId":"sess-001","seq":3},"label":"replan"}}

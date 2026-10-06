@@ -1,0 +1,52 @@
+{
+  "name": "@cordishub/core",
+  "version": "0.1.0",
+  "description": "CordisHub core — the meta-plugin that turns DeepSeek Harness into a workstation: plugin hub, replay lab, cost console, safety net.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./replay": "./dist/replay.js",
+    "./cost": "./dist/cost.js",
+    "./hub": "./dist/hub.js",
+    "./safety": "./dist/safety.js"
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "node --test dist/test/*.test.js",
+    "demo": "tsx demo/run.ts"
+  },
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "cordis",
+    "agent",
+    "harness",
+    "plugin",
+    "replay",
+    "cost",
+    "observability"
+  ],
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh": { "optional": true },
+    "cordis": { "optional": true }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": "*",
+    "cordis": "*"
+  },
+  "dependencies": {
+    "pino": "^9.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

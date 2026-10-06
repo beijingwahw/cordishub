@@ -1,0 +1,3 @@
+{"id":"sess-acme-001","startedAt":1791163015417,"model":"deepseek-v4-pro","totalTokens":0,"totalCost":0,"meta":{"tenant":"acme"}}
+{"id":"sess-acme-001","startedAt":1791163015417,"model":"deepseek-v4-pro","totalTokens":0,"totalCost":0,"meta":{"tenant":"acme"},"total_tokens":1670,"total_cost":0.0008900000000000001}
+{"id":"sess-beta-002","startedAt":1791163015911,"model":"deepseek-v4-pro","totalTokens":0,"totalCost":0,"meta":{"tenant":"beta-corp"}}
