@@ -1,0 +1,20 @@
+{
+  "name": "cordishub",
+  "private": true,
+  "version": "0.9.0",
+  "description": "DeepSeek Harness 一站式工作台 —— 插件市场 · 会话回放 · 成本仪表盘 · 多租户安全网",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w packages/core && npm run build -w packages/cli",
+    "test": "npm test -w packages/core",
+    "demo": "npm run demo -w packages/core",
+    "quickstart": "node --experimental-strip-types --no-warnings examples/quickstart.ts"
+  },
+  "engines": {
+    "node": ">=22.6.0"
+  }
+}

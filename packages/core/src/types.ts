@@ -4,6 +4,7 @@
  * DSH 的 session log 是一组连续的事件流，按"来源 (source)"分类：
  *   - system   : system prompt 与配置
  *   - reasoning: 模型推理 (thinking / chain-of-thought)
+ *   - model    : 模型响应（assistant 输出，携带 token 统计）
  *   - tool     : tool call 与结果
  *   - subagent : 子 agent 调度
  *   - context  : 上下文注入
@@ -15,6 +16,7 @@ export type EventSource =
   | 'system'
   | 'user'
   | 'reasoning'
+  | 'model'
   | 'tool'
   | 'subagent'
   | 'context'

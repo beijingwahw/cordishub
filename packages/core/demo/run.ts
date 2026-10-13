@@ -11,12 +11,28 @@
  * 运行：tsx demo/run.ts
  */
 
-import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
+import { writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
 
 import {
   CordishubService,
+  SafetyNet,
+  escapeHtml,
+  generateSigningKeyPair,
+  signManifest,
+  verifyManifest,
+  diffCapabilities,
+  renderCapabilityDiff,
+  renderGenome,
+  hashGenome,
+  loadGenomes,
+  verifyFile,
+  mintRoot,
+  attenuate,
+  assertTool,
+  cacheTaintCompatible,
+  type CounterfactualModel,
+  type PluginManifest,
   type SessionEvent,
   type Session,
 } from '../src/index.ts';
@@ -70,6 +86,7 @@ async function main() {
   const cordis = new CordishubService(ctx, {
     dbPath,
     onViolation: 'log',
+    budget: { limitUsd: 1.0, reserveEstimateUsd: 0.05 },
   });
 
   cordis.install();
@@ -117,11 +134,15 @@ async function main() {
     },
   ];
   for (const ev of eventsA) {
-    if (ev.source === 'model') ctx.emit('model/response', ev);
-    else if (ev.source === 'tool') {
-      // 拆成 called + result
-      ctx.emit('tool/called', { ...ev, payload: { tool_name: ev.payload.tool_name, arguments: ev.payload.arguments } });
-      ctx.emit('tool/result', { ...ev, payload: { tool_name: ev.payload.tool_name, result: ev.payload.result } });
+    if (ev.source === 'model') {
+      // v0.2：调用前先走预算预授权（reserve），响应后按实际成本结算（settle）
+      ctx.emit('model/request', { ...ev, id: `${ev.id}-req`, payload: {} });
+      ctx.emit('model/response', ev);
+    } else if (ev.source === 'tool') {
+      // 拆成 called + result（id 必须不同：append-only 内存索引按 id 去重，
+      // 共用 id 会让"结果"行覆盖"调用"行，盒带录制时丢失 tool-call 半边）
+      ctx.emit('tool/called', { ...ev, id: `${ev.id}-call`, payload: { tool_name: ev.payload.tool_name, arguments: ev.payload.arguments } });
+      ctx.emit('tool/result', { ...ev, id: `${ev.id}-result`, payload: { tool_name: ev.payload.tool_name, result: ev.payload.result } });
     } else ctx.emit('context/injection', ev);
   }
 
@@ -139,7 +160,7 @@ async function main() {
   } as Session);
 
   // 设置 safety 策略：tenant beta 只能用 read-only tools
-  cordis.safety = new (await import('../src/safety.ts')).SafetyNet({
+  cordis.safety = new SafetyNet({
     tenant: 'beta-corp',
     toolWhitelist: ['shell', 'read_file'],
   });
@@ -161,6 +182,14 @@ async function main() {
     console.log(`  ${b.id}  ${(b.model ?? '').padEnd(20)}  ${(b.totalTokens ?? 0).toString().padStart(6)} tok  $${(b.totalCost ?? 0).toFixed(4)}`);
   }
 
+  // ===== 演示 1.5: Budget Ledger（v0.2 预算预授权） =====
+  console.log('\n=== BUDGET LEDGER (v0.2 pre-auth) ===');
+  if (cordis.budget) {
+    const snap = cordis.budget.snapshot();
+    console.log(`  limit=$${snap.limitUsd.toFixed(2)}  spent=$${snap.spentUsd.toFixed(4)}  reserved=$${snap.reservedUsd.toFixed(4)}  available=$${snap.availableUsd.toFixed(4)}`);
+    console.log(`  模型调用前 reserve($0.05) → 响应后按实际成本 settle → 剩余额度即时释放`);
+  }
+
   // ===== 演示 2: Replay reconstruct =====
   console.log('\n=== REPLAY STATE for sess-001 (full) ===');
   const events = cordis.storage.getEvents(sessionAId);
@@ -175,10 +204,26 @@ async function main() {
   console.log(`  toolCalls: ${state.toolCalls.map((t) => t.name).join(', ')}`);
   console.log(`  totalTokens: ${state.totalTokens}`);
 
-  // ===== 演示 3: Fork =====
-  console.log('\n=== FORK from seq=3 ===');
+  // ===== 演示 3: Checkpoint + Fork =====
+  console.log('\n=== CHECKPOINT + FORK from seq=3 ===');
+  const cp = cordis.checkpoint(sessionAId, 3, 'before replan fork');
+  console.log(`  checkpoint: seq=${cp?.seq} eventId=${cp?.eventId} message="${cp?.message}"`);
   const forked = cordis.fork(sessionAId, 3, 'sess-001-fork', { label: 'replan' });
   console.log(`  forked session: ${forked.id}, model=${forked.model}, totalTokens=${forked.totalTokens}`);
+  console.log(`  checkpoints on ${sessionAId}: ${cordis.storage.checkpoints(sessionAId).length}`);
+
+  // ===== 演示 3.5: Genome（G0 会话可遗传化：提取 → 变异 → 育种） =====
+  console.log('\n=== GENOME (G0 extract → mutate → breed) ===');
+  const childGenome = cordis.breed(sessionAId, [
+    { kind: 'model-swap', model: 'deepseek-v4-flash' },
+    { kind: 'tool-add', tools: ['read_file'] },
+    { kind: 'policy', patch: { maxCostUsd: 0.5 } },
+  ], { name: 'billing-refactorer' });
+  if (childGenome) {
+    for (const line of renderGenome(childGenome)) console.log(`  ${line}`);
+    const fitness = cordis.genomeFitness(hashGenome(childGenome));
+    console.log(`  fitness: sessions=${fitness.sessions} tokens=${fitness.totalTokens} cost=$${fitness.totalCost.toFixed(4)}`);
+  }
 
   // ===== 演示 4: Diff two sessions at same seq range =====
   console.log('\n=== DIFF sess-001 vs sess-001-fork at [0, 3] ===');
@@ -195,17 +240,154 @@ async function main() {
   console.log(`\n  query="mcp" → ${cordis.hub.search({ query: 'mcp' }).length} hits`);
   console.log(`  onlyOfficial=true → ${cordis.hub.search({ official: true }).length} hits`);
 
+  // ===== 演示 5.5: Signed Manifest（v0.2 供应链防线） =====
+  console.log('\n=== SIGNED MANIFEST (v0.2 supply chain) ===');
+  const kp = generateSigningKeyPair();
+  const manifest: PluginManifest = {
+    name: 'community/dsh-plugin-cost-guard',
+    version: '0.2.0',
+    capabilities: ['fs.read', 'fs.write', 'shell'],
+    contentHash: 'ab'.repeat(32),
+    tarball: 'https://example.com/cost-guard-0.2.0.tgz',
+  };
+  const sig = signManifest(manifest, kp.privateKey);
+  console.log(`  signature: ${sig.slice(0, 32)}…`);
+  console.log(`  verify(original):      ${verifyManifest(manifest, sig, kp.publicKey)}`);
+  console.log(`  verify(tampered hash): ${verifyManifest({ ...manifest, contentHash: 'cd'.repeat(32) }, sig, kp.publicKey)}`);
+  console.log(`  capability diff 0.1.0 → 0.2.0:`);
+  for (const line of renderCapabilityDiff(manifest.name, '0.1.0', '0.2.0', diffCapabilities(['fs.read', 'net'], manifest.capabilities))) {
+    console.log(`  ${line}`);
+  }
+
   // ===== 演示 6: Safety violations =====
   console.log('\n=== SAFETY HISTORY ===');
   for (const v of cordis.safetyHistory()) {
     console.log(`  [${v.severity}] ${v.kind}: ${v.detail}`);
   }
 
-  // ===== 演示 7: Full-text search =====
+  // ===== 演示 8: Full-text search =====
   console.log('\n=== FULL-TEXT SEARCH ===');
   const hits = cordis.search('billing');
   for (const h of hits) {
     console.log(`  ${h.sessionId} (${h.source}): ${h.snippet}`);
+  }
+
+  // ===== 演示 9: Chain Audit（L0 哈希链防篡改） =====
+  console.log('\n=== CHAIN AUDIT (L0 tamper-evidence) ===');
+  cordis.storage.sealNow();
+  for (const r of cordis.audit()) {
+    const name = r.file.split(/[\\/]/).pop();
+    console.log(`  ${r.ok ? '✓' : '✗'} ${name}  seals=${r.seals} rows=${r.rows} head=${r.head.slice(0, 12)}…${r.error ? `  ${r.error}` : ''}`);
+  }
+  // 篡改演示：在副本上改一个字符，链验证必须失败
+  const eventsPath = cordis.audit().find((r) => r.file.endsWith('.events.jsonl'))!.file;
+  const tamperedPath = join(outDir, 'tampered.events.jsonl');
+  writeFileSync(tamperedPath, readFileSync(eventsPath, 'utf8').replace('billing', 'Billing'));
+  const bad = verifyFile(tamperedPath);
+  console.log(`  篡改副本（billing→Billing）验证: ok=${bad.ok}  ${bad.error ?? ''}`);
+  rmSync(tamperedPath);
+
+  // ===== 演示 10: Capability（ocap 能力衰减） =====
+  console.log('\n=== CAPABILITY (ocap attenuation) ===');
+  const rootCap = mintRoot({ tenant: 'acme', tools: ['shell', 'read_file', 'http_get'], maxSpendUsd: 1 });
+  const subCap = attenuate(rootCap, { tools: ['shell', 'read_file'], maxSpendUsd: 0.2 });
+  console.log(`  root: ${rootCap.tag}  tools=[${rootCap.tools.join(', ')}]  depth=${rootCap.depth}`);
+  console.log(`  sub:  ${subCap.tag}  tools=[${subCap.tools.join(', ')}]  depth=${subCap.depth}  parent=${subCap.parentTag}`);
+  try {
+    attenuate(rootCap, { tools: ['shell', 'net'] });
+  } catch (e) {
+    console.log(`  扩权尝试被拒: ${(e as Error).message}`);
+  }
+  try {
+    assertTool(subCap, 'http_get');
+  } catch (e) {
+    console.log(`  子令牌访问未授予工具被拒: ${(e as Error).message}`);
+  }
+
+  // ===== 演示 11: Cassette（L1 确定性回放：故障注入 + 因果二分） =====
+  console.log('\n=== CASSETTE (L1 deterministic replay) ===');
+  const tape = cordis.recordTape(sessionAId);
+  if (tape) {
+    const kinds: Record<string, number> = {};
+    for (const e of tape.entries) kinds[e.kind] = (kinds[e.kind] ?? 0) + 1;
+    console.log(`  tape: ${tape.entries.length} entries ${JSON.stringify(kinds)}`);
+    console.log(`  determinism: tools=${tape.determinism.toolsRecorded} sampling=${tape.determinism.samplingRecorded}`);
+
+    // 故障注入：第 0 个工具响应换成错误，脚本模型遇错即停 → 立刻分叉
+    const reactive: CounterfactualModel = {
+      next: (st) => {
+        const last = st.toolCalls[st.toolCalls.length - 1];
+        if (last?.error) return { type: 'stop' };
+        if (st.toolCalls.length === 0) return { type: 'tool', tool: 'shell', args: { cmd: 'ls src/billing' } };
+        return { type: 'say', text: 'All good.' };
+      },
+    };
+    const cf = cordis.counterfactual(sessionAId, { model: reactive, fault: { atToolIndex: 0, error: 'disk failure' } });
+    if (cf) {
+      console.log(`  fault@tool#0 → steps=${cf.steps.length} divergedAtStep=${cf.divergedAtStep ?? '—'} stop=${cf.stopReason}`);
+      console.log(`  注入错误对模型可见: error="${cf.endState.toolCalls[0]?.error}"`);
+    }
+
+    // 因果二分：找 "refund 出现在工具输出里" 最早发生的 seq
+    const bis = cordis.bisect(sessionAId, (st) => st.toolCalls.some((t) => (t.result as { stdout?: string } | undefined)?.stdout?.includes('refund')));
+    console.log(`  bisect "refund 泄漏" → firstBadSeq=${bis.seq}（仅 ${bis.checked} 次状态重构）`);
+
+    // ===== 演示 12: Reactor（G1 变体跑批：燃料闸门 + 适应度选择） =====
+    console.log('\n=== REACTOR (G1 variant batch under fuel gate) ===');
+    const recordedActions: import('../src/cassette.ts').CfAction[] = [];
+    for (const e of tape.entries) {
+      if (e.kind === 'tool-call') recordedActions.push({ type: 'tool', tool: e.tool, args: e.args });
+      else if (e.kind === 'model') recordedActions.push({ type: 'say', text: e.text });
+    }
+    const reactorReport = cordis.reactor(sessionAId, {
+      variants: [
+        { name: 'flash-fast', mutations: [{ kind: 'model-swap', model: 'deepseek-v4-flash' }] },
+        { name: 'pro-careful', mutations: [{ kind: 'tool-add', tools: ['read_file'] }] },
+        { name: 'pro-drifter', mutations: [{ kind: 'prompt-append', text: 'Explore aggressively.' }] },
+        { name: 'no-fuel', mutations: [{ kind: 'model-swap', model: 'deepseek-v4-flash' }] },
+      ],
+      harness: (g) => ({
+        next: (_st: unknown, step: number) => {
+          if (g.systemPrompt.includes('Explore aggressively')) {
+            return step === 0 ? { type: 'tool' as const, tool: 'shell', args: { cmd: 'find / -name secret' } } : { type: 'stop' as const };
+          }
+          return recordedActions[step] ?? { type: 'stop' as const };
+        },
+      }),
+      costOf: () => ({ costUsd: 0.02, tokens: 1000 }),
+      budget: { limitUsd: 0.07, fuelPerRunUsd: 0.02 },
+      save: true,
+    });
+    if (reactorReport) {
+      for (const r of reactorReport.runs) {
+        const mark = r.rejected ? '⛔' : ' ';
+        const fit = r.fitness === -Infinity ? '—    ' : r.fitness.toFixed(3);
+        const div = r.result ? (r.result.divergedAtStep ?? '—') : '—';
+        console.log(`  ${mark} ${r.variant.padEnd(13)} fitness=${fit}  cost=$${r.costUsd.toFixed(4)}  steps=${r.result?.steps.length ?? 0}  diverged=${div}${r.rejected ? '  ← 燃料不足，跑批前被拒' : ''}`);
+      }
+      console.log(`  best: ${reactorReport.best?.variant} [${reactorReport.best?.genomeHash.slice(0, 12)}]（保真优先；并列时取先者——真实场景按模型费率估成本，flash 更便宜）`);
+      console.log(`  spent=$${reactorReport.spentUsd.toFixed(4)}  available=$${reactorReport.availableUsd.toFixed(4)}  exhausted=${reactorReport.budgetExhausted}`);
+      console.log(`  基因库现有 ${loadGenomes(cordis.storage).length} 个基因组（种子 + 全部变体谱系）`);
+    }
+
+    // ===== 演示 13: Taint（信息流检查：传播 / 溯源 / 清洗 / 缓存兼容） =====
+    console.log('\n=== TAINT (information-flow check) ===');
+    const taintReport = cordis.taintScan(sessionAId, {
+      taintOfEvent: (source, p) =>
+        source === 'context' && String(p['text'] ?? '').includes('billing') ? ['tenant:acme'] : [],
+      taintOfToolResult: (tool, result) =>
+        String((result as { stdout?: string })?.stdout ?? '').includes('refund') ? ['pii'] : [],
+      sanitize: (tool) => /redact|sanitiz|scrub/i.test(tool),
+      forbiddenInOutput: ['secret'],
+    });
+    if (taintReport) {
+      for (const t of taintReport.timeline.filter((x) => x.added.length > 0 || x.removed.length > 0)) {
+        console.log(`    seq#${t.seq}  +[${t.added.join(', ') || '—'}]  -[${t.removed.join(', ') || '—'}]  → active=[${t.active.join(', ') || '—'}]`);
+      }
+      console.log(`  violations=${taintReport.violations.length}  final=[${taintReport.finalActive.join(', ') || '—'}]`);
+      console.log(`  prompt-cache 同租户复用: ${cacheTaintCompatible(['tenant:acme'], ['tenant:acme', 'pii'])}（子集规则放行）`);
+      console.log(`  prompt-cache 跨租户复用: ${cacheTaintCompatible(['tenant:acme'], ['tenant:beta-corp'])}（强制 MISS）`);
+    }
   }
 
   // ===== 输出 dashboard HTML =====
@@ -228,6 +410,7 @@ async function main() {
 }
 
 function renderDashboard(data: any): string {
+  const esc = (x: unknown) => escapeHtml(String(x ?? ''));
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -280,7 +463,7 @@ function renderDashboard(data: any): string {
 <header>
   <div class="brand">CordisHub</div>
   <span class="badge">DSH Workstation</span>
-  <span class="badge">v0.1.0</span>
+  <span class="badge">v0.9.0</span>
   <span class="badge" style="margin-left:auto">everything-is-a-plugin</span>
 </header>
 <main>
@@ -292,11 +475,11 @@ function renderDashboard(data: any): string {
     </div>
     <div class="card">
       <div class="label">Total Tokens</div>
-      <div class="stat">${data.breakdown.reduce((s: number, b: any) => s + b.total_tokens, 0).toLocaleString()}<small>tokens</small></div>
+      <div class="stat">${data.breakdown.reduce((s: number, b: any) => s + b.totalTokens, 0).toLocaleString()}<small>tokens</small></div>
     </div>
     <div class="card">
       <div class="label">Total Spend</div>
-      <div class="stat">$${data.breakdown.reduce((s: number, b: any) => s + b.total_cost, 0).toFixed(4)}</div>
+      <div class="stat">$${data.breakdown.reduce((s: number, b: any) => s + b.totalCost, 0).toFixed(4)}</div>
     </div>
     <div class="card">
       <div class="label">Safety Violations</div>
@@ -313,8 +496,8 @@ function renderDashboard(data: any): string {
       <tbody>
         ${data.breakdown.map((b: any) => `
         <tr>
-          <td><code>${b.id}</code></td>
-          <td>${b.model}</td>
+          <td><code>${esc(b.id)}</code></td>
+          <td>${esc(b.model)}</td>
           <td class="num">${b.totalTokens.toLocaleString()}</td>
           <td class="num">$${b.totalCost.toFixed(4)}</td>
         </tr>`).join('')}
@@ -329,7 +512,7 @@ function renderDashboard(data: any): string {
       <div class="timeline-item ${ev.source}">
         <span class="ts">#${ev.seq}</span>
         <span class="src">${ev.source}</span>
-        ${ev.payload.text || ev.payload.tool_name || (ev.payload.arguments ? JSON.stringify(ev.payload.arguments) : '')}
+        ${esc(ev.payload.text || ev.payload.tool_name || (ev.payload.arguments ? JSON.stringify(ev.payload.arguments) : ''))}
         ${ev.tokens ? `<span class="pill">${ev.tokens.total.toLocaleString()} tok</span>` : ''}
       </div>`).join('')}
     </div>
@@ -339,11 +522,11 @@ function renderDashboard(data: any): string {
   <div class="grid-2">
     <div class="card">
       <div class="label">Forked Session</div>
-      <pre>${JSON.stringify({ id: data.forked.id, model: data.forked.model, totalTokens: data.forked.totalTokens, label: data.forked.meta?.label }, null, 2)}</pre>
+      <pre>${esc(JSON.stringify({ id: data.forked.id, model: data.forked.model, totalTokens: data.forked.totalTokens, label: data.forked.meta?.label }, null, 2))}</pre>
     </div>
     <div class="card">
       <div class="label">Diff (orig vs fork) at [0,3]</div>
-      <pre>${JSON.stringify({ onlyInA: data.diff.onlyInA.length, onlyInB: data.diff.onlyInB.length, different: data.diff.different.length }, null, 2)}</pre>
+      <pre>${esc(JSON.stringify({ onlyInA: data.diff.onlyInA.length, onlyInB: data.diff.onlyInB.length, different: data.diff.different.length }, null, 2))}</pre>
     </div>
   </div>
 
@@ -358,9 +541,9 @@ function renderDashboard(data: any): string {
           ? '<tr><td colspan="4" style="text-align:center;color:var(--fg3);padding:24px">No violations. ✓</td></tr>'
           : data.safetyHistory.map((v: any) => `
         <tr>
-          <td><code>${v.kind}</code></td>
-          <td><span class="pill ${v.severity === 'block' ? 'err' : 'warn'}">${v.severity}</span></td>
-          <td>${v.detail}</td>
+          <td><code>${esc(v.kind)}</code></td>
+          <td><span class="pill ${v.severity === 'block' ? 'err' : 'warn'}">${esc(v.severity)}</span></td>
+          <td>${esc(v.detail)}</td>
           <td class="num">${new Date(v.ts).toISOString().slice(11, 19)}</td>
         </tr>`).join('')}
       </tbody>
@@ -376,10 +559,10 @@ function renderDashboard(data: any): string {
       <tbody>
         ${data.hubHits.map((p: any) => `
         <tr>
-          <td><code>${p.fullName}</code>${p.official ? ' <span class="pill ok">official</span>' : ''}</td>
-          <td>${p.description}</td>
+          <td><code>${esc(p.fullName)}</code>${p.official ? ' <span class="pill ok">official</span>' : ''}</td>
+          <td>${esc(p.description)}</td>
           <td class="num">${p.stars.toLocaleString()}</td>
-          <td>${p.tags.map((t: string) => `<span class="pill">${t}</span>`).join('')}</td>
+          <td>${p.tags.map((t: string) => `<span class="pill">${esc(t)}</span>`).join('')}</td>
         </tr>`).join('')}
       </tbody>
     </table>

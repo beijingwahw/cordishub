@@ -12,11 +12,14 @@
  */
 
 import type { SessionEvent } from './types.ts';
+import { assertTool, type Capability } from './capability.ts';
 
 export interface SafetyPolicy {
   tenant: string;
   /** 允许的工具白名单 */
   toolWhitelist?: string[];
+  /** v0.4 · 能力令牌（ocap）：设置后工具准入走结构性 assertTool，优先于 toolWhitelist */
+  capability?: Capability;
   /** 允许的子 agent ID 白名单 */
   subagentWhitelist?: string[];
   /** 配额：单 session 最大 token */
@@ -71,9 +74,21 @@ export class SafetyNet {
     const violations: SafetyViolation[] = [];
 
     // 工具越权
-    if (event.source === 'tool' && this.policy.toolWhitelist) {
+    if (event.source === 'tool') {
       const toolName = (event.payload as any).tool_name as string;
-      if (toolName && !this.policy.toolWhitelist.includes(toolName)) {
+      if (this.policy.capability) {
+        // ocap 模式：结构性准入（过期 / 未授予都会被拒）
+        try {
+          if (toolName) assertTool(this.policy.capability, toolName, event.ts);
+        } catch (err) {
+          violations.push({
+            kind: 'tool-overreach',
+            detail: (err as Error).message,
+            ts: event.ts,
+            severity: 'block',
+          });
+        }
+      } else if (this.policy.toolWhitelist && toolName && !this.policy.toolWhitelist.includes(toolName)) {
         violations.push({
           kind: 'tool-overreach',
           detail: `tool "${toolName}" not in whitelist for tenant "${this.policy.tenant}"`,
@@ -147,5 +162,15 @@ export class SafetyNet {
   /** 历史 violations */
   history(): SafetyViolation[] {
     return [...this.violations];
+  }
+
+  /** 记录一条 service 层直接产生的违规（如预算预授权拒绝） */
+  record(violation: SafetyViolation): void {
+    this.violations.push(violation);
+  }
+
+  /** 从持久化存储恢复历史违规（service 启动时调用，使 dashboard / CLI 重启后仍可见） */
+  restore(violations: SafetyViolation[]): void {
+    for (const v of violations) this.record(v);
   }
 }

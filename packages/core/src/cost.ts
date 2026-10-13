@@ -78,7 +78,7 @@ export interface CostOutput {
   total: number;
 }
 
-/** 谷段（UTC 16:30 - 次日 00:30） */
+/** 谷段（UTC 16:30 - 次日 00:30）——官方默认窗口的代码形态 */
 export function isValley(ts: number): boolean {
   const d = new Date(ts);
   const hour = d.getUTCHours();
@@ -88,9 +88,35 @@ export function isValley(ts: number): boolean {
   return minutesOfDay >= 990 || minutesOfDay <= 30;
 }
 
+/**
+ * 峰谷窗口（数据形态）——费率 DSL 的组成部分。
+ * endUtcMinutes < startUtcMinutes 表示跨午夜窗口。
+ */
+export interface ValleyWindow {
+  startUtcMinutes: number;
+  endUtcMinutes: number;
+  /** 命中窗口的价格系数（如谷段 0.25） */
+  factor: number;
+}
+
+/** 命中任一窗口则返回其系数（跨午夜正确处理），否则 1.0 */
+export function windowFactorAt(ts: number, windows: ValleyWindow[]): number {
+  const d = new Date(ts);
+  const m = d.getUTCHours() * 60 + d.getUTCMinutes();
+  for (const w of windows) {
+    const hit =
+      w.startUtcMinutes <= w.endUtcMinutes
+        ? m >= w.startUtcMinutes && m <= w.endUtcMinutes
+        : m >= w.startUtcMinutes || m <= w.endUtcMinutes;
+    if (hit) return w.factor;
+  }
+  return 1.0;
+}
+
 /** 默认用 DeepSeek 费率表，可以注入自定义 */
 export class CostEngine {
   private rates: Map<string, ModelRate>;
+  private valleyWindows?: ValleyWindow[];
 
   constructor(rates: ModelRate[] = DEEPSEEK_RATES) {
     this.rates = new Map(rates.map((r) => [r.model, r]));
@@ -99,6 +125,25 @@ export class CostEngine {
   /** 注册或覆盖一个模型费率 */
   setRate(rate: ModelRate): void {
     this.rates.set(rate.model, rate);
+  }
+
+  /** 查一个模型的费率（预授权额度估算等场景） */
+  rateFor(model: string): ModelRate | undefined {
+    return this.rates.get(model);
+  }
+
+  /**
+   * 峰谷窗口数据化（费率 DSL）：设置后按窗口计算折扣系数；
+   * 未设置则沿用官方默认（UTC 16:30-00:30 谷段 0.25x）。
+   */
+  setValleyWindows(windows?: ValleyWindow[]): void {
+    this.valleyWindows = windows;
+  }
+
+  /** 当前折扣系数：1.0 = 峰段原价 */
+  private valleyFactorAt(ts: number): number {
+    if (this.valleyWindows) return windowFactorAt(ts, this.valleyWindows);
+    return isValley(ts) ? 0.25 : 1.0;
   }
 
   /** 计算单次调用的成本 */
@@ -112,7 +157,7 @@ export class CostEngine {
         reasoning: ((input.reasoningTokens ?? 0) / 1e6) * 3,
         cacheRead: ((input.cacheReadTokens ?? 0) / 1e6) * 0,
         cacheWrite: ((input.cacheWriteTokens ?? 0) / 1e6) * 0,
-        valley: isValley(input.ts),
+        valley: this.valleyFactorAt(input.ts) < 1.0,
         total:
           (input.promptTokens / 1e6) * 1 +
           (input.completionTokens / 1e6) * 3 +
@@ -120,8 +165,8 @@ export class CostEngine {
       };
     }
 
-    const valley = isValley(input.ts);
-    const valleyFactor = valley ? 0.25 : 1.0;
+    const valleyFactor = this.valleyFactorAt(input.ts);
+    const valley = valleyFactor < 1.0;
 
     const prompt = (input.promptTokens / 1e6) * rate.promptPerMillion * valleyFactor;
     const completion =

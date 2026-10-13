@@ -23,6 +23,8 @@ export interface ReplayState {
   systemPrompt: string;
   /** 拼接的用户输入 */
   userInputs: string[];
+  /** 模型响应文本（source = 'model' 的事件） */
+  modelResponses: string[];
   /** 所有 tool call */
   toolCalls: Array<{
     id: string;
@@ -53,6 +55,67 @@ export interface DiffResult {
   different: Array<{ a: SessionEvent; b: SessionEvent; changedKeys: string[] }>;
 }
 
+/**
+ * 单事件增量折叠：reconstruct 与 cassette 的区间扫描共用，语义必须保持一致。
+ * 兼容两种工具 payload 命名（arguments/result 与 args/stdout）与无 toolCallId 的配对。
+ */
+export function foldEvent(state: ReplayState, ev: SessionEvent): void {
+  state.seq = ev.seq;
+  state.history.push(ev);
+
+  switch (ev.source) {
+    case 'system': {
+      state.systemPrompt += `${(ev.payload as any).text ?? ''}\n`;
+      break;
+    }
+    case 'user': {
+      state.userInputs.push((ev.payload as any).text ?? '');
+      break;
+    }
+    case 'model': {
+      state.modelResponses.push((ev.payload as any).text ?? '');
+      break;
+    }
+    case 'reasoning': {
+      state.reasoning.push((ev.payload as any).text ?? '');
+      break;
+    }
+    case 'tool': {
+      const p = ev.payload as any;
+      const toolName = p.tool_name ?? 'unknown';
+      const toolArgs = p.arguments ?? p.args;
+      const toolResult = p.result ?? (p.stdout !== undefined ? { stdout: p.stdout } : undefined);
+
+      if (ev.toolCallId) {
+        const existing = state.toolCalls.find((t) => t.id === ev.toolCallId);
+        if (existing) {
+          if (existing.result === undefined) existing.result = toolResult;
+          if (existing.args === undefined && toolArgs !== undefined) existing.args = toolArgs;
+        } else {
+          state.toolCalls.push({ id: ev.toolCallId, name: toolName, args: toolArgs, result: toolResult });
+        }
+      } else if (toolArgs === undefined && toolResult !== undefined) {
+        const pending = [...state.toolCalls]
+          .reverse()
+          .find((t) => t.name === toolName && t.result === undefined);
+        if (pending) pending.result = toolResult;
+        else state.toolCalls.push({ id: ev.id, name: toolName, args: undefined, result: toolResult });
+      } else {
+        state.toolCalls.push({ id: ev.id, name: toolName, args: toolArgs, result: toolResult });
+      }
+      break;
+    }
+    case 'subagent': {
+      // 子 agent 调度的实际 token / cost 由 tokens 字段计入
+      break;
+    }
+  }
+
+  if (ev.tokens) {
+    state.totalTokens += ev.tokens.total;
+  }
+}
+
 export class ReplayEngine {
   private storage: Storage;
   constructor(storage: Storage) {
@@ -72,71 +135,14 @@ export class ReplayEngine {
       history: [],
       systemPrompt: '',
       userInputs: [],
+      modelResponses: [],
       toolCalls: [],
       reasoning: [],
       totalTokens: 0,
       totalCost: 0,
     };
 
-    for (const ev of events) {
-      state.seq = ev.seq;
-      state.history.push(ev);
-
-      switch (ev.source) {
-        case 'system': {
-          const txt = (ev.payload as any).text ?? '';
-          state.systemPrompt += txt + '\n';
-          break;
-        }
-        case 'user': {
-          const txt = (ev.payload as any).text ?? '';
-          state.userInputs.push(txt);
-          break;
-        }
-        case 'reasoning': {
-          const txt = (ev.payload as any).text ?? '';
-          state.reasoning.push(txt);
-          break;
-        }
-        case 'tool': {
-          const toolName = (ev.payload as any).tool_name ?? 'unknown';
-          const toolArgs = (ev.payload as any).arguments;
-          const toolResult = (ev.payload as any).result;
-
-          // 配对一个 call + result
-          if (ev.toolCallId) {
-            const existing = state.toolCalls.find((t) => t.id === ev.toolCallId);
-            if (existing) {
-              if (existing.result === undefined) existing.result = toolResult;
-            } else {
-              state.toolCalls.push({
-                id: ev.toolCallId,
-                name: toolName,
-                args: toolArgs,
-                result: toolResult,
-              });
-            }
-          } else {
-            state.toolCalls.push({
-              id: ev.id,
-              name: toolName,
-              args: toolArgs,
-              result: toolResult,
-            });
-          }
-          break;
-        }
-        case 'subagent': {
-          // 子 agent 调度的实际 token / cost 会计入
-          break;
-        }
-      }
-
-      if (ev.tokens) {
-        state.totalTokens += ev.tokens.total;
-      }
-    }
-
+    for (const ev of events) foldEvent(state, ev);
     return state;
   }
 
@@ -150,7 +156,7 @@ export class ReplayEngine {
 
     const onlyInA: SessionEvent[] = [];
     const onlyInB: SessionEvent[] = [];
-    const different: DiffResult['diff'] = [];
+    const different: DiffResult['different'] = [];
 
     const allSeqs = new Set([...bySeqA.keys(), ...bySeqB.keys()]);
     for (const seq of allSeqs) {
@@ -174,21 +180,23 @@ export class ReplayEngine {
     sessionA: string,
     fromSeq: number,
     newSessionId: string,
-    options?: { model?: string; label?: string },
+    options?: { model?: string; label?: string; genome?: { hash: string; name?: string } },
   ): Session {
     const events = this.storage.getEventRange(sessionA, 0, fromSeq);
     const last = events[events.length - 1];
     if (!last) {
       throw new Error(`Cannot fork: session ${sessionA} has no events up to seq ${fromSeq}`);
     }
+    // model 继承链：显式指定 → 最后一条事件 → 父 session 本身
+    const parentSession = this.storage.getSession(sessionA);
 
     const forked: Session = {
       id: newSessionId,
       startedAt: Date.now(),
-      model: options?.model ?? last.model ?? 'unknown',
+      model: options?.model ?? last.model ?? parentSession?.model ?? 'unknown',
       totalTokens: 0,
       totalCost: 0,
-      meta: { forkedFrom: { sessionId: sessionA, seq: fromSeq }, label: options?.label },
+      meta: { forkedFrom: { sessionId: sessionA, seq: fromSeq }, label: options?.label, genome: options?.genome },
     };
     this.storage.beginSession(forked);
 

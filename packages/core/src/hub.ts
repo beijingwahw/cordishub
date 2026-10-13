@@ -13,6 +13,7 @@
  * 这里给出一个 mock 数据 + 真实可用的 search/install 骨架。
  */
 
+import { writeFileSync } from 'node:fs';
 import type { Storage } from './storage.ts';
 
 export interface PluginMeta {
@@ -126,8 +127,7 @@ export class HubIndex {
         integrity: '',
       })),
     };
-    const fs = require('fs') as typeof import('fs');
-    fs.writeFileSync(filename, JSON.stringify(lock, null, 2));
+    writeFileSync(filename, JSON.stringify(lock, null, 2));
     return filename;
   }
 }
