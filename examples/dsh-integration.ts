@@ -17,8 +17,8 @@ import type { Context } from 'cordis'
 export function applyAsPlugin(ctx: Context): void {
   apply(ctx, {
     capabilities: { hub: true, replay: true, cost: true, safety: true },
-    dbPath: `${process.env.CORDISHUB_DB ?? '~/.cordishub/cordishub.jsonl'}`,
-    onViolation: 'block',
+    dbPath: process.env.CORDISHUB_DB ?? '~/.cordishub/cordishub.jsonl',
+    onViolation: 'throw',
   })
 }
 
@@ -30,23 +30,31 @@ export function applyAsPlugin(ctx: Context): void {
  */
 export function mountCustom(ctx: Context): CordishubService {
   const svc = new CordishubService(ctx, {
-    dbPath: `${process.env.CORDISHUB_DB}`,
+    dbPath: process.env.CORDISHUB_DB ?? '~/.cordishub/cordishub.jsonl',
     rates: [
-      // 自定义费率表（默认覆盖了 deepseek-v4-pro 的公开定价）
-      { model: 'deepseek-v4-pro', input: 0.27, output: 1.10, cacheRead: 0.07 },
-    ],
-    capabilities: { hub: true, replay: true, cost: true, safety: true },
-    policies: [
+      // 自定义费率表，形状必须是 ModelRate（promptPerMillion / completionPerMillion / ...），
+      // 会整体替换默认的 DEEPSEEK_RATES
       {
-        name: 'prod',
-        match: { tenant: 'prod' },
-        toolAllowList: ['shell', 'read_file', 'http_get'],
-        maxTokensPerSession: 1_000_000,
-        blockToolOverflow: true,
-        allowPublicModel: true,
-        piiRedact: false,
+        model: 'deepseek-v4-pro',
+        promptPerMillion: 0.27,
+        completionPerMillion: 1.10,
+        reasoningPerMillion: 1.10,
+        cacheReadPerMillion: 0.07,
       },
     ],
+    capabilities: { hub: true, replay: true, cost: true, safety: true },
+    // "prod 租户策略"：用 safetyPolicy 表达（单租户粒度；多租户时给每个租户各建一个 CordishubService）
+    safetyPolicy: {
+      tenant: 'prod',
+      toolWhitelist: ['shell', 'read_file', 'http_get'],
+      maxTokens: 1_000_000,
+      maxCostUsd: 25,
+      maxSubagents: 8,
+      memoryGate: true,
+      memoryGateThreshold: 0.6,
+    },
+    // 违规即抛错（对应旧版 blockToolOverflow 的"硬熔断"语义）
+    onViolation: 'throw',
   })
   svc.install()
 

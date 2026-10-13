@@ -87,14 +87,14 @@ ctx.emit('model/response', {
   payload: { text: 'Hi acme team, what should I work on first?' },
 })
 
-// 3) 调一个合法工具
+// 3) 调一个合法工具（payload 按 schema 用 arguments / result）
 ctx.emit('tool/called', {
   id: 'ev-2',
   sessionId,
   source: 'tool',
   ts: Date.now(),
   seq: 2,
-  payload: { tool_name: 'shell', args: { cmd: 'ls -la' } },
+  payload: { tool_name: 'shell', arguments: { cmd: 'ls -la' } },
   meta: { tenant },
 })
 ctx.emit('tool/result', {
@@ -103,7 +103,7 @@ ctx.emit('tool/result', {
   source: 'tool',
   ts: Date.now(),
   seq: 3,
-  payload: { tool_name: 'shell', stdout: 'LICENSE\nREADME.md\nsrc/\n' },
+  payload: { tool_name: 'shell', result: { stdout: 'LICENSE\nREADME.md\nsrc/\n' } },
 })
 
 // === 3. 触发一个安全违规（演示 safety net） ===
@@ -129,8 +129,9 @@ ctx.emit('tool/called', {
 })
 
 // === 4. 关闭 sessions ===
-ctx.emit('session/ended', { id: sessionId, ts: Date.now() })
-ctx.emit('session/ended', { id: 'sess-beta-002', ts: Date.now() })
+// 标准两参形态：(sessionId, endedAt)。service 也兼容对象形态，但示例按规范写。
+ctx.emit('session/ended', sessionId, Date.now())
+ctx.emit('session/ended', 'sess-beta-002', Date.now())
 
 // === 5. 输出所有功能的结果 ===
 console.log('--- step 4 · 查看 CordisHub 输出\n')
@@ -170,5 +171,34 @@ const dashboardPath = path.join(OUTPUT_DIR, 'dashboard.html')
 fs.writeFileSync(dashboardPath, svc.renderDashboard(), 'utf8')
 console.log(`[DASHBOARD] ${dashboardPath}`)
 
+// === 7. 内核巡礼（v0.3-v0.8 能力一览） ===
+console.log('\n[KERNEL TOUR]')
+
+// L0 · 哈希链审计
+svc.sealNow()
+for (const r of svc.audit()) {
+  console.log(`  ${r.ok ? '✓' : '✗'} chain ${r.file.split(/[\\/]/).pop()} seals=${r.seals} head=${r.head.slice(0, 10)}…`)
+}
+
+// G0 · 基因型
+const genome = svc.extractGenome(sessionId)
+if (genome) {
+  console.log(`  genome: model=${genome.model} tools=[${genome.tools.join(', ')}] prompt="${genome.systemPrompt.slice(0, 36)}…"`)
+}
+
+// L1 · 确定性证书（注入确定性 stop 模型 ×3 次重放）
+const cert = svc.certifyTape(sessionId, { model: { next: () => ({ type: 'stop' }) }, stabilityRuns: 3 })
+if (cert) {
+  console.log(`  cassette: level=${cert.level} replayStable=${cert.replayStable}（×${cert.runsCompared} 次）`)
+}
+
+// v0.7 · 污点扫描（关键词策略）
+const taint = svc.taintScan(sessionId, {
+  taintOfToolResult: (_tool, result) => (String((result as { stdout?: string })?.stdout ?? '').includes('LICENSE') ? ['repo-meta'] : []),
+})
+if (taint) {
+  console.log(`  taint: active=[${taint.finalActive.join(', ')}] violations=${taint.violations.length}`)
+}
+
 svc.dispose()
-console.log('\n✓ CordisHub Quickstart 完成。  接下来：`cordishub dashboard` 看 UI；`cordishub cost` 看实时成本。')
+console.log('\n✓ CordisHub Quickstart 完成。  接下来：`cordishub serve` 起 JSON-RPC 内核；`cordishub record-demo` 录制演示会话。')
