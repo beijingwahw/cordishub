@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>CordisHub Desktop</title>
+<style>
+  :root {
+    --bg: #0b1020; --bg2: #11162a; --bg3: #1a2236; --fg: #e6e8ee; --fg2: #aab1c5;
+    --blue: #3b82f6; --green: #10b981; --red: #ef4444; --yellow: #f59e0b; --line: #1f2640;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--fg); font-size: 14px; }
+  header { display: flex; align-items: center; gap: 14px; padding: 16px 28px; border-bottom: 1px solid var(--line); background: linear-gradient(180deg,#0e1430,#0b1020); }
+  .logo { width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg,var(--blue),var(--green)); display: grid; place-items: center; font-weight: 800; color: #fff; }
+  h1 { font-size: 17px; margin: 0; }
+  .sub { color: var(--fg2); font-size: 12px; }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--bg3); color: var(--fg2); margin-left: 6px; }
+  .pill.ok { background: rgba(16,185,129,.15); color: var(--green); }
+  .pill.bad { background: rgba(239,68,68,.15); color: var(--red); }
+  .pill.warn { background: rgba(245,158,11,.15); color: var(--yellow); }
+  main { padding: 22px 28px; max-width: 1240px; margin: 0 auto; }
+  .card { background: var(--bg2); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 18px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg2); margin: 0 0 12px; }
+  input[type=text] { width: 100%; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg3); color: var(--fg); font-size: 14px; outline: none; }
+  input[type=text]:focus { border-color: var(--blue); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--fg2); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  code { font-family: ui-monospace, Menlo, monospace; background: var(--bg3); padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+  .row { display: flex; gap: 10px; align-items: baseline; padding: 5px 0; }
+  .stars { color: var(--yellow); font-variant-numeric: tabular-nums; min-width: 64px; display: inline-block; }
+  .desc { color: var(--fg2); font-size: 12px; }
+  button { padding: 8px 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg3); color: var(--fg); cursor: pointer; margin-left: auto; }
+  button:hover { border-color: var(--blue); }
+  .empty { color: var(--fg2); padding: 12px 0; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">CH</div>
+  <div>
+    <h1>CordisHub Desktop <span class="pill" id="version">…</span><span class="pill" id="conn">connecting</span></h1>
+    <div class="sub">DeepSeek Harness · 一站式工作台 · JSON-RPC 内核桥</div>
+  </div>
+  <button onclick="refreshAll()">刷新</button>
+</header>
+<main>
+  <div class="card">
+    <h2>Plugin Hub · 真实索引</h2>
+    <input type="text" id="q" placeholder="搜索插件（回车）…" onkeydown="if(event.key==='Enter')hubSearch()" />
+    <div id="hubResults" style="margin-top:10px"><div class="empty">输入关键词搜索 835+ 真实插件</div></div>
+  </div>
+
+  <div class="card">
+    <h2>Sessions &amp; Cost</h2>
+    <table><thead><tr><th>Session</th><th>Model</th><th class="num">Tokens</th><th class="num">Cost</th><th>Ended</th></tr></thead>
+    <tbody id="sessions"><tr><td colspan="5" class="empty">…</td></tr></tbody></table>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+    <div class="card">
+      <h2>Kernel Integrity</h2>
+      <div id="chains"><div class="empty">…</div></div>
+    </div>
+    <div class="card">
+      <h2>Genome Library</h2>
+      <table><thead><tr><th>Name</th><th>Model</th><th class="num">Runs</th><th class="num">Fitness cost</th></tr></thead>
+      <tbody id="genomes"><tr><td colspan="4" class="empty">…</td></tr></tbody></table>
+    </div>
+  </div>
+</main>
+
+<script>
+  // 端点自适应：内核同源托管（浏览器预览）用相对路径；Tauri WebView（tauri://）
+  // 环境回退到本机内核桥
+  const ENDPOINT = location.protocol.startsWith('http') ? '/' : 'http://127.0.0.1:8433/';
+  let id = 0;
+  async function rpc(method, params = {}) {
+    const res = await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: ++id, method, params }),
+    });
+    const json = await res.json();
+    if (json.error) throw new Error(json.error.message);
+    return json.result;
+  }
+  const fmtUsd = (x) => '$' + (Number(x) || 0).toFixed(4);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+
+  async function hubSearch() {
+    const q = document.getElementById('q').value.trim();
+    if (!q) return;
+    const hits = await rpc('hub.search', { query: q, limit: 12 });
+    const box = document.getElementById('hubResults');
+    box.innerHTML = hits.length === 0
+      ? '<div class="empty">没有匹配</div>'
+      : hits.map((h) => `<div class="row"><span class="stars">${Number(h.stars).toLocaleString()}★</span><span><code>${esc(h.fullName)}</code>${h.official ? ' <span class="pill ok">official</span>' : ''}<div class="desc">${esc(h.description)}</div></span></div>`).join('');
+  }
+
+  async function loadSessions() {
+    const [sessions, costs] = await Promise.all([rpc('sessions.list', { limit: 20 }), rpc('cost.breakdown')]);
+    const costMap = new Map(costs.map((c) => [c.id, c]));
+    const rows = sessions.map((s) => {
+      const c = costMap.get(s.id) ?? {};
+      return `<tr><td><code>${esc(s.id)}</code></td><td>${esc(c.model ?? s.model)}</td><td class="num">${Number(c.totalTokens ?? 0).toLocaleString()}</td><td class="num">${fmtUsd(c.totalCost)}</td><td>${c.endedAt ? new Date(c.endedAt).toLocaleTimeString() : '<span class="pill warn">open</span>'}</td></tr>`;
+    });
+    document.getElementById('sessions').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="5" class="empty">暂无 session（cordishub record-demo 录制一条）</td></tr>';
+  }
+
+  async function loadChains() {
+    const chains = await rpc('audit.chains');
+    const ok = chains.filter((c) => c.ok).length;
+    document.getElementById('chains').innerHTML =
+      `<div class="row"><span class="pill ${ok === chains.length ? 'ok' : 'bad'}">chain ${ok}/${chains.length} ok</span></div>` +
+      chains.map((c) => `<div class="row"><span class="pill ${c.ok ? 'ok' : 'bad'}">${esc(c.file.split(/[\\\\/]/).pop())}</span><span class="desc">seals=${c.seals} rows=${c.rows} head=${esc(String(c.head).slice(0, 12))}…${c.error ? ' ' + esc(c.error) : ''}</span></div>`).join('');
+  }
+
+  async function loadGenomes() {
+    const lib = await rpc('genome.library');
+    const top = lib.slice(0, 6);
+    const rows = [];
+    for (const g of top) {
+      let runs = 0, cost = 0;
+      try { const f = await rpc('genome.fitness', { hash: g.hash }); runs = f.sessions; cost = f.totalCost; } catch {}
+      rows.push(`<tr><td><code>${esc(g.genome.name ?? g.hash.slice(0, 12))}</code></td><td>${esc(g.genome.model)}</td><td class="num">${runs}</td><td class="num">${fmtUsd(cost)}</td></tr>`);
+    }
+    document.getElementById('genomes').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="4" class="empty">基因库为空（cordishub genome &lt;session&gt; 提取一个）</td></tr>';
+  }
+
+  async function refreshAll() {
+    try {
+      const info = await rpc('service.info');
+      document.getElementById('version').textContent = 'v' + info.version;
+      document.getElementById('version').className = 'pill ok';
+      document.getElementById('conn').textContent = 'kernel online';
+      document.getElementById('conn').className = 'pill ok';
+      await Promise.all([loadSessions(), loadChains(), loadGenomes()]);
+    } catch (err) {
+      document.getElementById('conn').textContent = 'kernel offline';
+      document.getElementById('conn').className = 'pill bad';
+    }
+  }
+  refreshAll();
+</script>
+</body>
+</html>

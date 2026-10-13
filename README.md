@@ -284,3 +284,10 @@ Replay Lab 打开 run #42，time-travel 到第 12 步，diff 第 12-17 步的所
 ## 许可证
 
 MIT
+---
+
+## v0.11 Tauri 桌面端（已落地）
+
+- **三形态桌面**：`cordishub desktop` 浏览器预览（内核同源托管 UI + 拉起系统浏览器，零构建）；Tauri 2 壳（同一份 `ui/index.html` 编入 WebView，**已实测编译** `cordishub-desktop.exe`）；`cargo tauri build` 打包分发；
+- **交互式 UI**：插件搜索（835+ 真实索引）、Sessions & Cost、内核完整性（Merkel 链）、基因库——全部走 JSON-RPC 方法表，UI↔方法表有同步守卫测试防漂移；
+- **踩坑记录（ICO 教学）**：Windows 资源编译要求规范 BMP 条目的 .ico——目录条目字段偏移（planes@10/bpp@12/bytes@14/offset@18）错一位 rc.exe 就报 RC2176；PNG-in-ICO 会被老 rc 拒绝。规范生成器已入库（icons/）。

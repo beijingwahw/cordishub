@@ -20,6 +20,8 @@ import { CordishubService } from '../../core/src/service.ts'
 import { renderGenome, saveGenome } from '../../core/src/genome.ts'
 import { startRpcServer } from '../../core/src/rpc.ts'
 import { syncHubTopic, syncHubTopics, githubTopicFetcher } from '../../core/src/hubsync.ts'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import * as path from 'node:path'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
@@ -74,7 +76,7 @@ function parseArgs(argv: string[]): { cmd: string[]; flags: Argv; rest: string[]
 
 // --------- 简易 Help / Banner ---------
 const HELP = `
-${c.cyan}${c.bold}CordisHub CLI${c.reset} ${c.dim}v0.10.0${c.reset}
+${c.cyan}${c.bold}CordisHub CLI${c.reset} ${c.dim}v0.11.0${c.reset}
 ${c.dim}DeepSeek · 一站式工作台 / 插件市场 / 会话回放 / 成本仪表盘${c.reset}
 
 ${c.bold}用法${c.reset}:
@@ -89,6 +91,7 @@ ${c.bold}用法${c.reset}:
   ${c.green}cordishub cassette${c.reset} <session-id>            录制/检查回放盒带（L1）
   ${c.green}cordishub record-demo${c.reset}                       录制演示会话（CLI 数据注入）
   ${c.green}cordishub serve${c.reset} [--port N]                 JSON-RPC 内核服务（L4）
+  ${c.green}cordishub desktop${c.reset} [--port N]               桌面预览（内核托管 UI + 浏览器）
   ${c.green}cordishub hub-sync${c.reset} [--topic T] [--token T]    GitHub topic 插件索引同步
 ${c.dim}  全局：--db <path> 指向任意 cordishub JSONL 存储（默认 ~/.local/share/cordishub）${c.reset}
   ${c.green}cordishub compact${c.reset}                           压实存储（每 id 保留最新行）
@@ -111,7 +114,7 @@ function printHelp(): void {
 }
 
 function banner(): void {
-  console.log(`${c.cyan}${c.bold}CordisHub${c.reset} ${c.dim}v0.10.0${c.reset} · DeepSeek 工作台`)
+  console.log(`${c.cyan}${c.bold}CordisHub${c.reset} ${c.dim}v0.11.0${c.reset} · DeepSeek 工作台`)
 }
 
 // --------- 共享：建立 storage <sessionId> ---------
@@ -320,6 +323,27 @@ async function cmdRecordDemo(ctx: any): Promise<void> {
   console.log(`${c.dim}试试: cordishub genome ${sid} · cordishub cassette ${sid} · cordishub replay ${sid}${c.reset}`)
 }
 
+function openBrowser(url: string): void {
+  if (process.platform === 'win32') {
+    spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' }).unref();
+  } else if (process.platform === 'darwin') {
+    spawn('open', [url], { detached: true, stdio: 'ignore' }).unref();
+  } else {
+    spawn('xdg-open', [url], { detached: true, stdio: 'ignore' }).unref();
+  }
+}
+
+async function cmdDesktop(core: CordishubService, flags: Argv): Promise<void> {
+  const port = Number(flags.port ?? 8433)
+  const uiPath = fileURLToPath(new URL('../../desktop/ui/index.html', import.meta.url))
+  const handle = await startRpcServer(core, { port, uiPath })
+  banner()
+  console.log(`${c.green}✓${c.reset} 桌面预览: ${c.cyan}http://127.0.0.1:${handle.port}${c.reset} ${c.dim}(UI 由内核同源托管，免 CORS)${c.reset}`)
+  console.log(`${c.dim}Tauri 壳（同一份 UI 编入 WebView）: packages/desktop/src-tauri → cargo build${c.reset}`)
+  openBrowser(`http://127.0.0.1:${handle.port}`)
+  await new Promise<never>(() => {}) // 保持运行直至 SIGINT
+}
+
 async function cmdServe(core: CordishubService, flags: Argv): Promise<void> {
   const port = Number(flags.port ?? 8321)
   const handle = await startRpcServer(core, { port })
@@ -506,6 +530,10 @@ async function main(): Promise<void> {
         await cmdServe(core, flags)
         break
       }
+      case 'desktop': {
+        await cmdDesktop(core, flags)
+        break
+      }
       case 'hub-sync': {
         await cmdHubSync(core, flags)
         break
@@ -521,7 +549,7 @@ async function main(): Promise<void> {
       case 'version':
       case '--version':
       case '-v': {
-        console.log('cordishub v0.10.0')
+        console.log('cordishub v0.11.0')
         break
       }
       default: {

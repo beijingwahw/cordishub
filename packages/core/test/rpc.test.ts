@@ -9,7 +9,8 @@ import { join } from 'node:path';
 import { get } from 'node:http';
 
 import { CordishubService } from '../src/service.ts';
-import { startRpcServer, rpcCall } from '../src/rpc.ts';
+import { startRpcServer, rpcCall, buildMethodTable } from '../src/rpc.ts';
+import { loadGenomes } from '../src/genome.ts';
 import type { Session, SessionEvent } from '../src/types.ts';
 
 function tmpDb(name: string): string {
@@ -94,6 +95,44 @@ test('rpc · 方法表全链路（info/hub/genome/taint/cassette/audit/错误码
       }).on('error', reject);
     });
     assert.equal(health.ok, true);
+  } finally {
+    await handle.close();
+    svc.dispose();
+    rmSync(join(db, '..'), { recursive: true, force: true });
+  }
+});
+
+test('rpc · uiPath 同源托管 + 桌面 UI 与方法表同步守卫', async () => {
+  const db = tmpDb('ui');
+  const ctx = mockCtx();
+  const svc = new CordishubService(ctx, { dbPath: db });
+  svc.install();
+  const { writeFileSync, readFileSync } = await import('node:fs');
+
+  // uiPath：GET / 返回托管文件（桌面预览免 CORS 的机制基础）
+  const uiFile = join(db, '..', 'mini-ui.html');
+  writeFileSync(uiFile, '<html><body>cordishub-desktop-ui</body></html>');
+  const handle = await startRpcServer(svc, { uiPath: uiFile });
+  try {
+    const html = await new Promise<string>((resolve, reject) => {
+      get(`http://127.0.0.1:${handle.port}/`, (res) => {
+        let d = '';
+        res.on('data', (c) => (d += c));
+        res.on('end', () => resolve(d));
+      }).on('error', reject);
+    });
+    assert.match(html, /cordishub-desktop-ui/);
+
+    // 同步守卫：桌面 UI 引用的每个方法都必须存在于内核方法表（防 UI 与内核漂移）
+    const desktopUi = readFileSync(
+      join(import.meta.dirname, '..', '..', '..', 'packages', 'desktop', 'ui', 'index.html'),
+      'utf8',
+    );
+    const called = [...desktopUi.matchAll(/rpc\('([a-z.]+)'/g)].map((m) => m[1]!);
+    assert.ok(called.length >= 5, `UI 应引用足够方法（实际 ${called.length}）`);
+    const table = buildMethodTable(svc);
+    const missing = called.filter((m) => !(m in table));
+    assert.deepEqual(missing, [], 'UI 引用的方法必须全部存在于方法表');
   } finally {
     await handle.close();
     svc.dispose();

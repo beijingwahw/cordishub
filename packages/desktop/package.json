@@ -1,0 +1,11 @@
+{
+  "name": "@cordishub/desktop",
+  "version": "0.11.0",
+  "private": true,
+  "description": "CordisHub 桌面端 —— Tauri 2 壳 + JSON-RPC 内核桥（UI 同源托管，浏览器预览零构建）",
+  "scripts": {
+    "preview": "node --experimental-strip-types ../../packages/cli/src/index.ts desktop",
+    "tauri": "cd src-tauri && cargo build",
+    "tauri:release": "cd src-tauri && cargo build --release"
+  }
+}

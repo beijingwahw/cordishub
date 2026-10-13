@@ -9,6 +9,7 @@
  * compileTaintPolicy 把关键词规则编译成策略，函数不出进程边界。
  */
 import { createServer, request as httpRequest, type Server } from 'node:http';
+import { readFileSync, existsSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import type { CordishubService } from './service.ts';
 import { loadGenomes } from './genome.ts';
@@ -23,7 +24,7 @@ export function buildMethodTable(svc: CordishubService): RpcMethodTable {
   return {
     'service.info': () => ({
       name: 'cordishub',
-      version: '0.10.0',
+      version: '0.11.0',
       capabilities: svc.capabilities,
     }),
     'sessions.list': (p) => svc.recentSessions(Number(p['limit'] ?? 20)),
@@ -90,10 +91,11 @@ export interface RpcServerHandle {
   close(): Promise<void>;
 }
 
-/** 启动 JSON-RPC HTTP 服务器（port 0 = 随机可用端口，测试用） */
+/** 启动 JSON-RPC HTTP 服务器（port 0 = 随机可用端口，测试用）。
+ *  uiPath 提供时，GET / 直接托管该 HTML——WebView 客户端与内核同源，免 CORS。 */
 export function startRpcServer(
   svc: CordishubService,
-  opts: { port?: number; host?: string } = {},
+  opts: { port?: number; host?: string; uiPath?: string } = {},
 ): Promise<RpcServerHandle> {
   const table = buildMethodTable(svc);
 
@@ -101,6 +103,16 @@ export function startRpcServer(
     if (req.method === 'GET' && req.url === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
+      if (opts.uiPath && existsSync(opts.uiPath)) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(readFileSync(opts.uiPath, 'utf8'));
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { code: -32001, message: 'no ui served' } }));
       return;
     }
     if (req.method !== 'POST') {

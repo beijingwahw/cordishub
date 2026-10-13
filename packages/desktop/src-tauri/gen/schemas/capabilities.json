@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"CordisHub Desktop 默认能力（仅核心权限，最小授权）","local":true,"windows":["main"],"permissions":["core:default"]}}
