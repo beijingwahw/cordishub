@@ -1,7 +1,7 @@
-{"id":"sess-001","startedAt":1791871928767,"model":"deepseek-v4-pro","totalTokens":0,"totalCost":0,"meta":{"tenant":"acme-corp","run":"demo-a"}}
-{"id":"sess-001","startedAt":1791871928767,"model":"deepseek-v4-pro","totalTokens":5650,"totalCost":0.002883,"meta":{"tenant":"acme-corp","run":"demo-a"}}
-{"id":"sess-001","startedAt":1791871928767,"model":"deepseek-v4-pro","totalTokens":5650,"totalCost":0.002883,"meta":{"tenant":"acme-corp","run":"demo-a"},"endedAt":1791871928769}
-{"id":"sess-002","startedAt":1791871928770,"model":"deepseek-v4-pro","totalTokens":0,"totalCost":0,"meta":{"tenant":"beta-corp"}}
-{"id":"sess-002","startedAt":1791871928770,"model":"deepseek-v4-pro","totalTokens":0,"totalCost":0,"meta":{"tenant":"beta-corp"},"endedAt":1791871928770}
-{"id":"sess-001-fork","startedAt":1791871928771,"model":"deepseek-v4-pro","totalTokens":0,"totalCost":0,"meta":{"forkedFrom":{"sessionId":"sess-001","seq":3},"label":"replan"}}
-{"__seal":true,"index":0,"prev":"0000000000000000000000000000000000000000000000000000000000000000","root":"f7a56ac239835366f9769c84037190d909dc361ff5211fb7bf847e1fc11c7b43","rowCount":6,"ts":1791871928776}
+{"id":"sess-001","startedAt":1791872391350,"model":"deepseek-v4-pro","totalTokens":0,"totalCost":0,"meta":{"tenant":"acme-corp","run":"demo-a"}}
+{"id":"sess-001","startedAt":1791872391350,"model":"deepseek-v4-pro","totalTokens":5650,"totalCost":0.002883,"meta":{"tenant":"acme-corp","run":"demo-a"}}
+{"id":"sess-001","startedAt":1791872391350,"model":"deepseek-v4-pro","totalTokens":5650,"totalCost":0.002883,"meta":{"tenant":"acme-corp","run":"demo-a"},"endedAt":1791872391353}
+{"id":"sess-002","startedAt":1791872391353,"model":"deepseek-v4-pro","totalTokens":0,"totalCost":0,"meta":{"tenant":"beta-corp"}}
+{"id":"sess-002","startedAt":1791872391353,"model":"deepseek-v4-pro","totalTokens":0,"totalCost":0,"meta":{"tenant":"beta-corp"},"endedAt":1791872391353}
+{"id":"sess-001-fork","startedAt":1791872391355,"model":"deepseek-v4-pro","totalTokens":0,"totalCost":0,"meta":{"forkedFrom":{"sessionId":"sess-001","seq":3},"label":"replan"}}
+{"__seal":true,"index":0,"prev":"0000000000000000000000000000000000000000000000000000000000000000","root":"de389b576dba285a94ef024d902172408c004f030bde3e6c39067a23356cb44e","rowCount":6,"ts":1791872391360}

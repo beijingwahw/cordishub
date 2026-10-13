@@ -1484,3 +1484,108 @@ test('evolve · 每世代燃料池市场模式可运行且可复现', () => {
   a.close();
   b.close();
 });
+
+// ---------- G4 · 轨迹公地 ----------
+
+import { exportBundle, importBundle, verifyBundle, CommonsConsentError, CommonsVerifyError } from '../src/commons.ts';
+
+function commonsFixture() {
+  const db = tmpDb('commons');
+  const s = new Storage({ path: db, silent: true });
+  s.beginSession(sess('src1'));
+  s.appendEvent(ev(1, 'src1', 'system', { text: 'You are a billing assistant.' }));
+  s.appendEvent(ev(2, 'src1', 'user', { text: 'private user secret' }));
+  s.appendEvent(ev(3, 'src1', 'tool', { tool_name: 'shell', arguments: { cmd: 'ls' }, result: { stdout: 'invoice.ts' } }, { toolCallId: 't1' }));
+  s.appendEvent(ev(4, 'src1', 'model', { text: 'Found one file.' }, { model: 'deepseek-v4-pro' }));
+  return { s, replay: new ReplayEngine(s) };
+}
+
+test('commons · 同意门：未覆盖的 taint 拒绝导出，覆盖则通过且导出纯净（不写存储）', () => {
+  const { s, replay } = commonsFixture();
+  const kp = generateSigningKeyPair();
+  const kvBefore = loadGenomes(s).length;
+  assert.throws(
+    () => exportBundle('src1', s, replay, {
+      consent: { allowTaints: ['tenant:acme'], expiresAt: Date.now() + 3600_000 },
+      publisher: 'acme', activeTaints: ['tenant:acme', 'pii'],
+      signWith: { privateKeyBase64: kp.privateKey },
+    }),
+    CommonsConsentError,
+  );
+  const bundle = exportBundle('src1', s, replay, {
+    consent: { allowTaints: ['tenant:acme', 'pii'], expiresAt: Date.now() + 3600_000, redact: { contextSources: ['user'] } },
+    publisher: 'acme', activeTaints: ['tenant:acme', 'pii'],
+    signWith: { privateKeyBase64: kp.privateKey },
+  });
+  assert.ok(bundle.bundleId.startsWith('cmn-'));
+  assert.equal(bundle.redaction.removedEntries, 1, 'user 来源被剔除');
+  assert.ok(bundle.tape.entries.every((e) => !(e.kind === 'context' && e.source === 'user')), '剔除后无用户原文');
+  assert.equal(loadGenomes(s).length, kvBefore, '导出是纯函数：不写基因库');
+  s.close();
+});
+
+test('commons · 完整性：篡改内容 → 哈希失配；过期/不受信发布者 → 拒收', () => {
+  const { s, replay } = commonsFixture();
+  const kp = generateSigningKeyPair();
+  const trust = new TrustRegistry([{ publisher: 'acme', keys: [{ id: 'k1', publicKey: kp.publicKey, createdAt: '2026-01-01' }] }]);
+  const consent = { allowTaints: ['tenant:acme'], expiresAt: Date.now() + 3600_000 };
+  const bundle = exportBundle('src1', s, replay, { consent, publisher: 'acme', activeTaints: ['tenant:acme'], signWith: { privateKeyBase64: kp.privateKey } });
+
+  assert.equal(verifyBundle(bundle, trust).ok, true);
+  const tampered = JSON.parse(JSON.stringify(bundle)) as typeof bundle;
+  tampered.tape.entries[0] = { ...tampered.tape.entries[0]!, ts: 424242 };
+  assert.throws(() => verifyBundle(tampered, trust), CommonsVerifyError);
+  const expired = JSON.parse(JSON.stringify(bundle)) as typeof bundle;
+  expired.consent.expiresAt = Date.now() - 1;
+  assert.throws(() => verifyBundle(expired, trust), /expired/);
+  const unknownTrust = new TrustRegistry([]);
+  assert.equal(verifyBundle(bundle, unknownTrust).reason, 'unknown-publisher');
+  s.close();
+});
+test('commons · 导入：物化为本地 session，谱系/基因库/回放全链路可用', () => {
+  const src = commonsFixture();
+  const kp = generateSigningKeyPair();
+  const trust = new TrustRegistry([{ publisher: 'acme', keys: [{ id: 'k1', publicKey: kp.publicKey, createdAt: '2026-01-01' }] }]);
+  const bundle = exportBundle('src1', src.s, src.replay, {
+    consent: { allowTaints: [], expiresAt: Date.now() + 3600_000 },
+    publisher: 'acme', activeTaints: [], signWith: { privateKeyBase64: kp.privateKey },
+  });
+  src.s.close();
+
+  // 全新存储（模拟另一台机器）：导入后轨迹可回放、基因入库、谱系可查
+  const dst = new Storage({ path: tmpDb('commons-dst'), silent: true });
+  const dstReplay = new ReplayEngine(dst);
+  const imported = importBundle(bundle, dst, { trust, newSessionId: 'imported-1' });
+  assert.equal(imported.decision.ok, true);
+  assert.equal(imported.sessionId, 'imported-1');
+  assert.equal(imported.events, bundle.tape.entries.length);
+
+  const state = dstReplay.reconstruct('imported-1');
+  assert.match(state.systemPrompt, /billing assistant/, '导入轨迹可回放');
+  assert.equal(state.toolCalls.length, 1);
+  assert.deepEqual(state.toolCalls[0]!.args, { cmd: 'ls' }, '配对完整：参数');
+  assert.deepEqual(state.toolCalls[0]!.result, { stdout: 'invoice.ts' }, '配对完整：结果');
+
+  const full = dst.getSession('imported-1')!;
+  assert.equal((full.meta as { commons?: { publisher: string } }).commons?.publisher, 'acme', '谱系指向发布者');
+  const genomeHash = (full.meta as { genome?: { hash: string } }).genome?.hash!;
+  assert.ok(genomeHash);
+  assert.ok(loadGenomes(dst).some((g) => g.hash === genomeHash), '基因随包裹入库');
+  assert.equal(fitnessOf(dst, genomeHash).sessions, 1, '导入即该谱系首个 run，适应度立即可见');
+  dst.close();
+});
+
+test('commons · 不受信发布者的包裹在导入时被拒', () => {
+  const src = commonsFixture();
+  const kp = generateSigningKeyPair();
+  const bundle = exportBundle('src1', src.s, src.replay, {
+    consent: { allowTaints: [], expiresAt: Date.now() + 3600_000 },
+    publisher: 'acme', activeTaints: [], signWith: { privateKeyBase64: kp.privateKey },
+  });
+  src.s.close();
+  const dst = new Storage({ path: tmpDb('commons-deny'), silent: true });
+  const emptyTrust = new TrustRegistry([]);
+  assert.throws(() => importBundle(bundle, dst, { trust: emptyTrust }), /unknown-publisher/);
+  assert.equal(dst.getEvents('x').length, 0, '拒收时不落任何事件');
+  dst.close();
+});

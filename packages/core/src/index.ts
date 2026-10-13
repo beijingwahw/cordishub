@@ -120,6 +120,8 @@ export {
   diffCapabilities,
   renderCapabilityDiff,
   TrustRegistry,
+  signData,
+  verifyData,
   type PluginManifest,
   type CapabilityDiff,
   type SigningKeyPair,
@@ -127,6 +129,15 @@ export {
   type PublisherEntry,
   type VerifyDecision,
 } from './manifest.ts';
+export {
+  exportBundle,
+  importBundle,
+  verifyBundle,
+  CommonsConsentError,
+  CommonsVerifyError,
+  type CommonsBundle,
+  type CommonsConsent,
+} from './commons.ts';
 export {
   ReplayEngine,
   type ReplayState,

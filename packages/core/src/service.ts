@@ -41,6 +41,13 @@ import {
 import { taintScan, type TaintPolicy, type TaintReport } from './taint.ts';
 import { syncHubTopic, syncHubTopics, githubTopicFetcher } from './hubsync.ts';
 import {
+  exportBundle,
+  importBundle,
+  type CommonsBundle,
+  type CommonsConsent,
+} from './commons.ts';
+import type { TrustRegistry } from './manifest.ts';
+import {
   extractGenomeFromSession,
   mutate,
   saveGenome,
@@ -573,6 +580,33 @@ export class CordishubService {
       maxPages: opts.maxPages,
       onProgress: opts.onProgress,
     });
+  }
+
+  /** ===== G4 · 轨迹公地 ===== */
+
+  /**
+   * 导出轨迹包裹：同意门（activeTaints ⊄ consent.allowTaints 即拒绝）+ 剔除 +
+   * ed25519 签名。导出是纯函数——不写存储；发不发出本机是调用方的事。
+   */
+  exportCommons(
+    sessionId: string,
+    opts: {
+      consent: CommonsConsent;
+      publisher: string;
+      activeTaints: string[];
+      signWith: { privateKeyBase64: string };
+      includeGenome?: boolean;
+    },
+  ): CommonsBundle {
+    return exportBundle(sessionId, this.storage, this.replay, opts);
+  }
+
+  /** 导入轨迹包裹：验签（TrustRegistry 发布者信任 + 内容哈希）后物化为本地 session */
+  importCommons(
+    bundle: CommonsBundle,
+    opts: { trust: TrustRegistry; newSessionId?: string },
+  ): { sessionId: string; events: number; removedEntries: number } {
+    return importBundle(bundle, this.storage, opts);
   }
 
   /** ===== G1 · 进化反应堆 ===== */

@@ -76,6 +76,25 @@ export function signManifest(m: PluginManifest, privateKeyBase64: string): strin
   );
 }
 
+/** 通用数据签名（轨迹公地等非 manifest 载荷复用同一套 ed25519 基元） */
+export function signData(data: string, privateKeyBase64: string): string {
+  return cryptoSign(null, Buffer.from(data, 'utf8'), keyFrom(privateKeyBase64, 'private')).toString('base64');
+}
+
+/** 通用数据验签：内容或签名被篡改即 false；密钥格式异常也返回 false */
+export function verifyData(data: string, signatureBase64: string, publicKeyBase64: string): boolean {
+  try {
+    return cryptoVerify(
+      null,
+      Buffer.from(data, 'utf8'),
+      keyFrom(publicKeyBase64, 'public'),
+      Buffer.from(signatureBase64, 'base64'),
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** 验签（公钥）—— 内容或签名被篡改即 false；密钥格式异常也返回 false 而非抛错 */
 export function verifyManifest(m: PluginManifest, signatureBase64: string, publicKeyBase64: string): boolean {
   try {
@@ -155,11 +174,18 @@ export class TrustRegistry {
    * at 支持回溯判定："安装那一刻它是否可信"——退休前的旧密钥在历史时间点仍然有效。
    */
   verify(m: PluginManifest, signature: string, opts: { at?: number } = {}): VerifyDecision {
-    const at = opts.at ?? Date.now();
     if (this.revokedHashes.has(hashManifest(m)) || this.revokedHashes.has(m.contentHash)) {
       return { ok: false, reason: 'revoked-artifact' };
     }
-    const publisher = m.name.split('/')[0];
+    return this.verifyRaw(m.name.split('/')[0], canonicalManifest(m), signature, opts);
+  }
+
+  /**
+   * 发布者信任的泛化验证（轨迹公地等任意载荷）：同一套密钥轮换/退休/吊销语义。
+   * 注意：制品级吊销（revokedHashes）是 manifest 专属，raw 载荷只有密钥级防线。
+   */
+  verifyRaw(publisher: string, data: string, signature: string, opts: { at?: number } = {}): VerifyDecision {
+    const at = opts.at ?? Date.now();
     const entry = this.byName.get(publisher);
     if (!entry) return { ok: false, reason: 'unknown-publisher' };
 
@@ -172,7 +198,7 @@ export class TrustRegistry {
     if (candidates.length === 0) return { ok: false, reason: 'no-active-key' };
 
     for (const k of candidates) {
-      if (verifyManifest(m, signature, k.publicKey)) return { ok: true, keyId: k.id };
+      if (verifyData(data, signature, k.publicKey)) return { ok: true, keyId: k.id };
     }
     return { ok: false, reason: 'bad-signature' };
   }

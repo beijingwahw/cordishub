@@ -94,3 +94,9 @@
 {"id":"sess-acme-001","startedAt":1791871928926,"model":"deepseek-v4-pro","totalTokens":1670,"totalCost":0.0008900000000000001,"meta":{"tenant":"acme"},"endedAt":1791871928928}
 {"id":"sess-beta-002","startedAt":1791871928927,"model":"deepseek-v4-pro","totalTokens":0,"totalCost":0,"meta":{"tenant":"beta-corp"},"endedAt":1791871928928}
 {"__seal":true,"index":5,"prev":"14f15eb92d1ae6bce82242c508072ce569c296ce59797ccfc66a2557086e8356","root":"48e85381f9760cdc300605b8311a1a5937cf46444da8f61bd29120ae2a4661fc","rowCount":5,"ts":1791871928947}
+{"id":"sess-acme-001","startedAt":1791872391508,"model":"deepseek-v4-pro","totalTokens":0,"totalCost":0,"meta":{"tenant":"acme"}}
+{"id":"sess-acme-001","startedAt":1791872391508,"model":"deepseek-v4-pro","totalTokens":1670,"totalCost":0.0008900000000000001,"meta":{"tenant":"acme"}}
+{"id":"sess-beta-002","startedAt":1791872391509,"model":"deepseek-v4-pro","totalTokens":0,"totalCost":0,"meta":{"tenant":"beta-corp"}}
+{"id":"sess-acme-001","startedAt":1791872391508,"model":"deepseek-v4-pro","totalTokens":1670,"totalCost":0.0008900000000000001,"meta":{"tenant":"acme"},"endedAt":1791872391510}
+{"id":"sess-beta-002","startedAt":1791872391509,"model":"deepseek-v4-pro","totalTokens":0,"totalCost":0,"meta":{"tenant":"beta-corp"},"endedAt":1791872391510}
+{"__seal":true,"index":6,"prev":"6198cd51ad3979ebea736bfebfdad12cccf63804e82976abb1b369da849736e5","root":"2047511d15d42dae46cca33147155b252ced64d770260bcf6145747f509caf63","rowCount":5,"ts":1791872391531}

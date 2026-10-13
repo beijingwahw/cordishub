@@ -20,6 +20,8 @@ import { CordishubService } from '../../core/src/service.ts'
 import { renderGenome, saveGenome } from '../../core/src/genome.ts'
 import { startRpcServer } from '../../core/src/rpc.ts'
 import { syncHubTopic, syncHubTopics, githubTopicFetcher } from '../../core/src/hubsync.ts'
+import { generateSigningKeyPair, TrustRegistry } from '../../core/src/manifest.ts'
+import type { CommonsBundle } from '../../core/src/commons.ts'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import * as path from 'node:path'
@@ -76,7 +78,7 @@ function parseArgs(argv: string[]): { cmd: string[]; flags: Argv; rest: string[]
 
 // --------- 简易 Help / Banner ---------
 const HELP = `
-${c.cyan}${c.bold}CordisHub CLI${c.reset} ${c.dim}v0.12.0${c.reset}
+${c.cyan}${c.bold}CordisHub CLI${c.reset} ${c.dim}v0.13.0${c.reset}
 ${c.dim}DeepSeek · 一站式工作台 / 插件市场 / 会话回放 / 成本仪表盘${c.reset}
 
 ${c.bold}用法${c.reset}:
@@ -93,6 +95,8 @@ ${c.bold}用法${c.reset}:
   ${c.green}cordishub serve${c.reset} [--port N]                 JSON-RPC 内核服务（L4）
   ${c.green}cordishub desktop${c.reset} [--port N]               桌面预览（内核托管 UI + 浏览器）
   ${c.green}cordishub hub-sync${c.reset} [--topic T] [--token T]    GitHub topic 插件索引同步
+  ${c.green}cordishub commons-export${c.reset} <id> [--allow T,..]    轨迹公地导出（同意门+签名）
+  ${c.green}cordishub commons-import${c.reset} <file> --pubkey K     轨迹公地导入（验签+谱系）
 ${c.dim}  全局：--db <path> 指向任意 cordishub JSONL 存储（默认 ~/.local/share/cordishub）${c.reset}
   ${c.green}cordishub compact${c.reset}                           压实存储（每 id 保留最新行）
   ${c.green}cordishub rebuild${c.reset}                           从磁盘日志重建内存投影
@@ -114,7 +118,7 @@ function printHelp(): void {
 }
 
 function banner(): void {
-  console.log(`${c.cyan}${c.bold}CordisHub${c.reset} ${c.dim}v0.12.0${c.reset} · DeepSeek 工作台`)
+  console.log(`${c.cyan}${c.bold}CordisHub${c.reset} ${c.dim}v0.13.0${c.reset} · DeepSeek 工作台`)
 }
 
 // --------- 共享：建立 storage <sessionId> ---------
@@ -386,6 +390,50 @@ async function cmdHubSync(core: CordishubService, flags: Argv): Promise<void> {
   }
 }
 
+async function cmdCommonsExport(core: CordishubService, sessionId: string, flags: Argv): Promise<void> {
+  banner()
+  const allow = String(flags.allow ?? '').split(',').map((x) => x.trim()).filter(Boolean)
+  const redactSources = String(flags.redact ?? '').split(',').map((x) => x.trim()).filter(Boolean)
+  const hours = Number(flags.expires ?? 24)
+  const keyFlag = typeof flags.key === 'string' ? flags.key : undefined
+  const kp = keyFlag ? { publicKey: '(provided)', privateKey: keyFlag } : generateSigningKeyPair()
+  const scan = core.taintScan(sessionId, { taintOfToolResult: () => ['tenant:default'] })
+  const active = scan ? [...new Set([...scan.finalActive, 'tenant:default'])] : ['tenant:default']
+  const bundle = core.exportCommons(sessionId, {
+    consent: {
+      allowTaints: allow.length > 0 ? allow : active,
+      redact: redactSources.length > 0 ? { contextSources: redactSources } : undefined,
+      expiresAt: Date.now() + hours * 3600_000,
+      purpose: 'commons export via CLI',
+    },
+    publisher: String(flags.publisher ?? 'local'),
+    activeTaints: active,
+    signWith: { privateKeyBase64: kp.privateKey },
+  })
+  if (!keyFlag) {
+    console.log(`  ${c.yellow}! 未提供持久签名密钥（--key），已生成临时密钥。公钥（导入端需登记为发布者）:${c.reset}`)
+    console.log(`    ${c.cyan}${kp.publicKey}${c.reset}`)
+  }
+  const out = typeof flags.out === 'string' ? flags.out : `commons-${bundle.bundleId}.json`
+  fs.writeFileSync(out, JSON.stringify(bundle, null, 2), 'utf8')
+  console.log(`  ${c.green}✓${c.reset} 导出 ${c.bold}${bundle.bundleId}${c.reset}（${bundle.tape.entries.length} 条，剔除 ${bundle.redaction.removedEntries}）→ ${out}`)
+  console.log(`  ${c.dim}同意覆盖污点：[${bundle.consent.allowTaints.join(', ')}]；导出不写存储，发送由你决定。${c.reset}`)
+}
+
+async function cmdCommonsImport(core: CordishubService, file: string, flags: Argv): Promise<void> {
+  banner()
+  const bundle = JSON.parse(fs.readFileSync(file, 'utf8')) as CommonsBundle
+  const publisher = String(flags.publisher ?? bundle.publisher)
+  const pubkey = String(flags.pubkey ?? '')
+  if (!pubkey) {
+    console.error(`${c.red}error:${c.reset} 需 --pubkey <base64>（发布者公钥，登记进临时信任注册表）`)
+    process.exit(1)
+  }
+  const trust = new TrustRegistry([{ publisher, keys: [{ id: 'k-cli', publicKey: pubkey, createdAt: '2020-01-01' }] }])
+  const result = core.importCommons(bundle, { trust })
+  console.log(`  ${c.green}✓${c.reset} 导入 ${c.bold}${result.sessionId}${c.reset}（${result.events} 事件，来源剔除 ${result.removedEntries}）——可 replay / fork / 育种`)
+}
+
 async function cmdCompact(core: CordishubService): Promise<void> {
   banner()
   const result = core.storage.compact()
@@ -534,6 +582,22 @@ async function main(): Promise<void> {
         await cmdDesktop(core, flags)
         break
       }
+      case 'commons-export': {
+        if (!sub) {
+          console.error(`${c.red}error:${c.reset} cordishub commons-export <session-id>`)
+          process.exit(1)
+        }
+        await cmdCommonsExport(core, sub, flags)
+        break
+      }
+      case 'commons-import': {
+        if (!sub) {
+          console.error(`${c.red}error:${c.reset} cordishub commons-import <bundle.json>`)
+          process.exit(1)
+        }
+        await cmdCommonsImport(core, sub, flags)
+        break
+      }
       case 'hub-sync': {
         await cmdHubSync(core, flags)
         break
@@ -549,7 +613,7 @@ async function main(): Promise<void> {
       case 'version':
       case '--version':
       case '-v': {
-        console.log('cordishub v0.12.0')
+        console.log('cordishub v0.13.0')
         break
       }
       default: {
