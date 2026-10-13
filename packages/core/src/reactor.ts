@@ -20,6 +20,7 @@ import {
 } from './cassette.ts';
 import { BudgetLedger, BudgetExceededError } from './budget.ts';
 import { CostEngine } from './cost.ts';
+import { ResourceMarket, type MarketGrant } from './market.ts';
 
 export interface ReactorVariant {
   name: string;
@@ -49,6 +50,8 @@ export interface ReactorRun {
   tokens: number;
   fitness: number;
   rejected: boolean;
+  /** 拒绝原因：'budget'（配给制超额）| 'market'（竞价落选） */
+  rejectedReason?: 'budget' | 'market';
 }
 
 export interface ReactorReport {
@@ -99,7 +102,19 @@ export function runReactor(opts: {
   variants: ReactorVariant[];
   tape: CassetteTape;
   harness: (genome: AgentGenome) => CounterfactualModel;
-  budget: BudgetLedger;
+  /** 配给制燃料闸门（与 fuel 二选一） */
+  budget?: BudgetLedger;
+  /**
+   * G3 市场模式：世代级批量竞价（与 budget 二选一）。
+   * 容量足够时逐字退化为配给制；争抢出现才启动加权拍卖——
+   * 维度激活纪律的运行时实现，见 docs/DESIGN.md。
+   */
+  fuel?: {
+    capacityUsd: number;
+    /** 出价权重（谱系适应度 / 任务优先级），缺省 1 */
+    weightOf?: (variant: ReactorVariant, genome: AgentGenome) => number;
+    minGrantUsd?: number;
+  };
   fitness?: ReactorFitness;
   costOf?: ReactorCostOf;
   /** 每个变体的燃料预授权额度（美元） */
@@ -111,6 +126,9 @@ export function runReactor(opts: {
   /** 被燃料拒绝的变体是否入库（缺省 true：视为"已探索"素材） */
   saveRejected?: boolean;
 }): ReactorReport {
+  if (!opts.budget && !opts.fuel) {
+    throw new Error('fuel gate required: pass budget (rationing) or fuel (market)');
+  }
   const fitness = opts.fitness ?? defaultFitness;
   const costOf = opts.costOf ?? defaultCostOf;
   const fuel = opts.fuelPerRunUsd ?? 0.05;
@@ -120,22 +138,57 @@ export function runReactor(opts: {
   // 种子入库（谱系根节点；与某变体同指纹时自然去重）
   if (opts.storage) saveGenome(opts.storage, opts.seed);
 
-  for (const v of opts.variants) {
+  // 预构建全部变体基因（市场模式需要先出价、一次出清、再依序执行）
+  const built = opts.variants.map((v) => {
     let genome = v.base ?? opts.seed;
     for (const m of v.mutations) genome = mutate(genome, m);
-    const genomeHash = hashGenome(genome);
+    return { v, genome, genomeHash: hashGenome(genome) };
+  });
 
-    // 燃料闸门：跑批前预授权——超限在运行发生前被拒绝
+  const market = opts.fuel ? new ResourceMarket(opts.fuel.capacityUsd) : undefined;
+  const grants: Array<MarketGrant | undefined> = market
+    ? built.map(({ v, genome }, i) =>
+        market.enqueue(
+          {
+            bidder: `reactor:${v.name}`,
+            amountUsd: fuel,
+            weight: opts.fuel!.weightOf?.(v, genome) ?? 1,
+            minGrantUsd: opts.fuel!.minGrantUsd,
+          },
+          Date.now() + i, // FIFO 平局顺序稳定
+        ),
+      )
+    : [];
+  // 一次加权出清：容量足够时全部立即等额授予（= 配给制）；争抢才见权重
+  if (market) market.clear(opts.fuel!.minGrantUsd ?? 0);
+
+  for (let i = 0; i < built.length; i++) {
+    const { v, genome, genomeHash } = built[i]!;
+
+    // 燃料闸门：配给制 = 逐个预授权；市场制 = 竞价结果（granted 0 = 落选）
     let reserveId: string | undefined;
     let rejected = false;
-    try {
-      reserveId = opts.budget.reserve(fuel, `reactor:${v.name}`);
-    } catch (err) {
-      if (err instanceof BudgetExceededError) {
-        budgetExhausted = true;
+    let rejectedReason: 'budget' | 'market' | undefined;
+    if (market) {
+      const g = grants[i]!;
+      if (g.grantedUsd <= 0) {
         rejected = true;
+        rejectedReason = 'market';
+        budgetExhausted = true;
       } else {
-        throw err;
+        reserveId = g.id;
+      }
+    } else {
+      try {
+        reserveId = opts.budget!.reserve(fuel, `reactor:${v.name}`);
+      } catch (err) {
+        if (err instanceof BudgetExceededError) {
+          budgetExhausted = true;
+          rejected = true;
+          rejectedReason = 'budget';
+        } else {
+          throw err;
+        }
       }
     }
 
@@ -150,14 +203,17 @@ export function runReactor(opts: {
         tokens: 0,
         fitness: -Infinity,
         rejected: true,
+        rejectedReason,
       });
       continue;
     }
     if (opts.storage) saveGenome(opts.storage, genome);
 
-    const result = playCounterfactualSafe(opts, genome, reserveId!);
+    // 市场部分授予的变体照跑（授予额即本变体燃料上限，实际成本由结算记账）
+    const result = playCounterfactualSafe(opts, market ?? opts.budget!, genome, reserveId!);
     const { costUsd, tokens } = costOf(genome, result);
-    opts.budget.settle(reserveId!, costUsd);
+    if (market) market.settle(reserveId!, costUsd);
+    else opts.budget!.settle(reserveId!, costUsd);
     runs.push({
       variant: v.name,
       genome,
@@ -177,8 +233,8 @@ export function runReactor(opts: {
   return {
     runs,
     best,
-    spentUsd: opts.budget.spent(),
-    availableUsd: opts.budget.available(),
+    spentUsd: market ? market.spent() : opts.budget!.spent(),
+    availableUsd: market ? market.available() : opts.budget!.available(),
     budgetExhausted,
   };
 }
@@ -193,8 +249,8 @@ function playCounterfactualSafe(
     harness: (genome: AgentGenome) => CounterfactualModel;
     maxSteps?: number;
     fromSeq?: number;
-    budget: BudgetLedger;
   },
+  gate: { release(id: string): unknown },
   genome: AgentGenome,
   reserveId: string,
 ): CounterfactualResult {
@@ -205,7 +261,7 @@ function playCounterfactualSafe(
       fromSeq: opts.fromSeq,
     });
   } catch (err) {
-    opts.budget.release(reserveId);
+    gate.release(reserveId);
     throw err;
   }
 }
@@ -350,7 +406,14 @@ export function evolve(opts: {
   mutationPool: GenomeMutation[];
   tape: CassetteTape;
   harness: (genome: AgentGenome) => CounterfactualModel;
-  budget: BudgetLedger;
+  /** 配给制总闸门（与 fuel 二选一）：跨世代共享 */
+  budget?: BudgetLedger;
+  /** G3 市场模式（与 budget 二选一）：每世代一个燃料池，批量竞价出清 */
+  fuel?: {
+    perGenerationUsd: number;
+    weightOf?: (variant: ReactorVariant, genome: AgentGenome) => number;
+    minGrantUsd?: number;
+  };
   fitness?: ReactorFitness;
   costOf?: ReactorCostOf;
   fuelPerRunUsd?: number;
@@ -371,6 +434,7 @@ export function evolve(opts: {
   const hallOfFame: ReactorRun[] = [];
   let parents: AgentGenome[] = [opts.seed];
   let budgetExhausted = false;
+  let marketSpent = 0;
 
   for (let gen = 0; gen < opts.generations; gen++) {
     const variants: ReactorVariant[] = [];
@@ -386,6 +450,9 @@ export function evolve(opts: {
       tape: opts.tape,
       harness: opts.harness,
       budget: opts.budget,
+      fuel: opts.fuel
+        ? { capacityUsd: opts.fuel.perGenerationUsd, weightOf: opts.fuel.weightOf, minGrantUsd: opts.fuel.minGrantUsd }
+        : undefined,
       fitness: opts.fitness,
       costOf: opts.costOf,
       fuelPerRunUsd: opts.fuelPerRunUsd,
@@ -394,6 +461,7 @@ export function evolve(opts: {
       storage: opts.storage,
       saveRejected: opts.saveRejected,
     });
+    if (opts.fuel && !opts.budget) marketSpent += report.spentUsd;
     generations.push({ index: gen, parentHashes: parents.map((p) => hashGenome(p)), report });
     budgetExhausted = budgetExhausted || report.budgetExhausted;
 
@@ -408,5 +476,11 @@ export function evolve(opts: {
   for (const r of hallOfFame) {
     if (best === null || r.fitness > best.fitness) best = r;
   }
-  return { generations, hallOfFame, best, spentUsd: opts.budget.spent(), budgetExhausted };
+  return {
+    generations,
+    hallOfFame,
+    best,
+    spentUsd: opts.budget ? opts.budget.spent() : marketSpent,
+    budgetExhausted,
+  };
 }

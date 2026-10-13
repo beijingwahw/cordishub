@@ -49,6 +49,7 @@ import { certifyDeterminism, stampSampling, locateBadEvents } from '../src/casse
 import { taintScan, cacheTaintCompatible, tenantTaintPolicy } from '../src/taint.ts';
 import { selectParents, genomeDistance, type ReactorRun } from '../src/reactor.ts';
 import { syncHubTopic, syncHubTopics, type RepoFetcher } from '../src/hubsync.ts';
+import { ResourceMarket } from '../src/market.ts';
 import { HubIndex, DEMO_PLUGINS } from '../src/hub.ts';
 import { SafetyNet } from '../src/safety.ts';
 import { CordishubService } from '../src/service.ts';
@@ -1368,4 +1369,118 @@ test('hubsync · 多 topic 同步：来源标签 + 跨 topic 去重', async () =
   const shared = unique.find((p) => p.fullName === 'acme/shared')!;
   assert.deepEqual(shared.tags, ['github-topic:beta'], '后写 topic 的标签覆盖（最新来源）');
   s.close();
+});
+
+// ---------- G3 · 内部市场 ----------
+
+test('market · 配给退化：无争抢时与 reserve/settle 语义一致', () => {
+  const m = new ResourceMarket(10);
+  const a = m.bid({ bidder: 'a', amountUsd: 3 });
+  assert.equal(a.status, 'granted', '容量足够必须立即全额授予');
+  assert.equal(a.grantedUsd, 3);
+  m.settle(a.id, 2.5);
+  const b = m.bid({ bidder: 'b', amountUsd: 4 });
+  assert.equal(b.status, 'granted');
+  assert.ok(Math.abs(m.available() - 3.5) < 1e-9);
+  assert.ok(Math.abs(m.spent() - 2.5) < 1e-9);
+});
+
+test('market · 争抢触发加权拍卖：高权重优先，尾部部分授予', () => {
+  const m = new ResourceMarket(5);
+  const low = m.enqueue({ bidder: 'low', amountUsd: 3, weight: 1 }, 1000);   // 先到但权重低
+  const high = m.enqueue({ bidder: 'high', amountUsd: 3, weight: 10 }, 2000); // 后到但权重高
+  m.clear();
+  assert.equal(high.grantedUsd, 3, '高权重全额');
+  assert.equal(low.grantedUsd, 2, '剩余容量给低权重部分授予');
+  assert.equal(low.status, 'partial');
+  // 实际成本低于授予（结算差额）→ 释放的容量补给排队者
+  m.settle(high.id, 2);
+  m.resettle();
+  assert.equal(low.grantedUsd, 3, '结算差额必须补给排队者');
+  assert.equal(low.status, 'granted');
+});
+
+test('market · aging 防饿死：低权重多轮等待后优先级反超', () => {
+  const m = new ResourceMarket(1);
+  const starved = m.enqueue({ bidder: 'starved', amountUsd: 1, weight: 1 }, 1000);
+  let lastBully;
+  for (let round = 1; round <= 2; round++) {
+    const bully = m.enqueue({ bidder: `bully-${round}`, amountUsd: 1, weight: 2 }, 2000 + round);
+    m.clear();
+    if (round === 1) {
+      assert.equal(bully.grantedUsd, 1, '第一轮高权重胜出');
+      assert.equal(starved.grantedUsd, 0, 'starved 被挤掉，开始累积等待');
+      m.settle(bully.id, 0.5); // 只用了 0.5，释放 0.5
+    }
+    lastBully = bully;
+  }
+  assert.ok(starved.waitedRounds >= 1, `等待轮数应累积（实际 ${starved.waitedRounds}）`);
+  assert.ok(starved.grantedUsd > 0, 'aging 抬升 + FIFO 平局后低权重反超拿到释放容量');
+  assert.equal(lastBully!.grantedUsd, 0, '后来的高权重这轮排到 starved 之后');
+});
+
+test('reactor · 燃料市场模式：权重决定谁拿到燃料（对比配给制的先到先得）', () => {
+  const build = () => {
+    const db = tmpDb('mkt-reactor');
+    const s = new Storage({ path: db, silent: true });
+    s.beginSession(sess('mr1'));
+    s.appendEvent(ev(1, 'mr1', 'tool', { tool_name: 'shell', arguments: { cmd: 'ls' }, result: { stdout: 'ok' } }, { toolCallId: 't1' }));
+    return { s, tape: recordTape('mr1', s, new ReplayEngine(s))! };
+  };
+  const seed: AgentGenome = { name: 'seed', version: '0.1.0', systemPrompt: '', model: 'deepseek-v4-pro', tools: [], subagents: [], policy: {} };
+  const stop = (): CounterfactualModel => ({ next: () => ({ type: 'stop' }) });
+  const costOf = () => ({ costUsd: 0.02, tokens: 1 });
+
+  // 容量只够一个变体：市场模式下 flash（权重 5）应胜出，pro 落选
+  const { s, tape } = build();
+  const report = runReactor({
+    seed, tape,
+    fuel: { capacityUsd: 0.03, weightOf: (_v, g) => (g.model === 'deepseek-v4-flash' ? 5 : 1) },
+    fuelPerRunUsd: 0.03,
+    variants: [
+      { name: 'pro-first', mutations: [] },
+      { name: 'flash-second', mutations: [{ kind: 'model-swap', model: 'deepseek-v4-flash' }] },
+    ],
+    harness: stop,
+    costOf,
+  });
+  assert.equal(report.runs[0]!.rejected, true, '低权重先出价也会被高权重反超');
+  assert.equal(report.runs[0]!.rejectedReason, 'market');
+  assert.equal(report.runs[1]!.rejected, false, '高权重拿到燃料');
+  assert.ok(Math.abs(report.spentUsd - 0.02) < 1e-12, '市场结算与配给同语义');
+  assert.throws(() => runReactor({ seed, tape, variants: [], harness: stop }), /fuel gate required/);
+  s.close();
+});
+
+test('evolve · 每世代燃料池市场模式可运行且可复现', () => {
+  const mk = () => {
+    const db = tmpDb('mkt-evolve');
+    const s = new Storage({ path: db, silent: true });
+    s.beginSession(sess('me1'));
+    s.appendEvent(ev(1, 'me1', 'tool', { tool_name: 'shell', arguments: { cmd: 'ls' }, result: { stdout: 'ok' } }, { toolCallId: 't1' }));
+    return { s, tape: recordTape('me1', s, new ReplayEngine(s))! };
+  };
+  const seed: AgentGenome = { name: 'seed', version: '0.1.0', systemPrompt: '', model: 'deepseek-v4-pro', tools: [], subagents: [], policy: {} };
+  const pool = [
+    { kind: 'model-swap' as const, model: 'deepseek-v4-flash' },
+    { kind: 'tool-add' as const, tools: ['read_file'] },
+  ];
+  const runOnce = () => {
+    const { s, tape } = mk();
+    const r = evolve({
+      seed, generations: 3, populationSize: 3, mutationPool: pool, tape,
+      harness: (): CounterfactualModel => ({ next: () => ({ type: 'stop' }) }),
+      fuel: { perGenerationUsd: 0.5 },
+      fuelPerRunUsd: 0.05,
+      costOf: () => ({ costUsd: 0.01, tokens: 1 }),
+    });
+    return { r, close: () => s.close() };
+  };
+  const a = runOnce();
+  const b = runOnce();
+  assert.equal(a.r.generations.length, 3, '市场模式世代正常推进');
+  assert.ok(a.r.spentUsd > 0, '跨世代市场消耗累计');
+  assert.equal(a.r.best!.genomeHash, b.r.best!.genomeHash, '市场模式同样可复现');
+  a.close();
+  b.close();
 });

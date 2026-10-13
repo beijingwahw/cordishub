@@ -1,7 +1,7 @@
 {
   "name": "cordishub",
   "private": true,
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "DeepSeek Harness 一站式工作台 —— 插件市场 · 会话回放 · 成本仪表盘 · 多租户安全网",
   "license": "MIT",
   "type": "module",

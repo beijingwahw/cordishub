@@ -76,7 +76,7 @@ function parseArgs(argv: string[]): { cmd: string[]; flags: Argv; rest: string[]
 
 // --------- 简易 Help / Banner ---------
 const HELP = `
-${c.cyan}${c.bold}CordisHub CLI${c.reset} ${c.dim}v0.11.0${c.reset}
+${c.cyan}${c.bold}CordisHub CLI${c.reset} ${c.dim}v0.12.0${c.reset}
 ${c.dim}DeepSeek · 一站式工作台 / 插件市场 / 会话回放 / 成本仪表盘${c.reset}
 
 ${c.bold}用法${c.reset}:
@@ -114,7 +114,7 @@ function printHelp(): void {
 }
 
 function banner(): void {
-  console.log(`${c.cyan}${c.bold}CordisHub${c.reset} ${c.dim}v0.11.0${c.reset} · DeepSeek 工作台`)
+  console.log(`${c.cyan}${c.bold}CordisHub${c.reset} ${c.dim}v0.12.0${c.reset} · DeepSeek 工作台`)
 }
 
 // --------- 共享：建立 storage <sessionId> ---------
@@ -549,7 +549,7 @@ async function main(): Promise<void> {
       case 'version':
       case '--version':
       case '-v': {
-        console.log('cordishub v0.11.0')
+        console.log('cordishub v0.12.0')
         break
       }
       default: {

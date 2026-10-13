@@ -93,6 +93,7 @@ export {
   type GithubRepo,
   type RepoFetcher,
 } from './hubsync.ts';
+export { ResourceMarket, type MarketBid, type MarketGrant } from './market.ts';
 export { CostEngine, DEEPSEEK_RATES, isValley, windowFactorAt, type ModelRate, type CostInput, type CostOutput, type ValleyWindow } from './cost.ts';
 export { TariffSchedule, DEFAULT_TARIFF, type Tariff } from './tariff.ts';
 export { BudgetLedger, BudgetExceededError, type LedgerEntry, type BudgetSnapshot } from './budget.ts';

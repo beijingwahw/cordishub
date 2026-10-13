@@ -24,7 +24,7 @@ export function buildMethodTable(svc: CordishubService): RpcMethodTable {
   return {
     'service.info': () => ({
       name: 'cordishub',
-      version: '0.11.0',
+      version: '0.12.0',
       capabilities: svc.capabilities,
     }),
     'sessions.list': (p) => svc.recentSessions(Number(p['limit'] ?? 20)),

@@ -463,7 +463,7 @@ function renderDashboard(data: any): string {
 <header>
   <div class="brand">CordisHub</div>
   <span class="badge">DSH Workstation</span>
-  <span class="badge">v0.11.0</span>
+  <span class="badge">v0.12.0</span>
   <span class="badge" style="margin-left:auto">everything-is-a-plugin</span>
 </header>
 <main>

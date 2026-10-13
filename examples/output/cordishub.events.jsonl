@@ -88,3 +88,9 @@
 {"id":"ev-4","sessionId":"sess-beta-002","source":"tool","ts":1791871321587,"seq":1,"payload":{"tool_name":"delete_database","args":{"table":"users"}},"meta":{"tenant":"beta-corp"}}
 {"id":"safety-1791871321587-cvpk1n","sessionId":"safety","source":"meta","ts":1791871321587,"seq":0,"payload":{"kind":"tool-overreach","detail":"tool \"delete_database\" not in whitelist for tenant \"acme\"","ts":1791871321587,"severity":"block"}}
 {"__seal":true,"index":4,"prev":"eb8ba520acbb53f36e71da4b868c212e278541a7c0a9f29eb21b931a2c8b6823","root":"3b3acd36ae6e61c739f124de2f73f36bcc36e5ea94f0bc4dc82484933e725635","rowCount":5,"ts":1791871321607}
+{"id":"ev-1","sessionId":"sess-acme-001","source":"model","ts":1791871928927,"seq":1,"model":"deepseek-v4-pro","tokens":{"prompt":1200,"completion":320,"reasoning":150,"total":1670,"cacheRead":700},"payload":{"text":"Hi acme team, what should I work on first?"}}
+{"id":"ev-2","sessionId":"sess-acme-001","source":"tool","ts":1791871928927,"seq":2,"payload":{"tool_name":"shell","arguments":{"cmd":"ls -la"}},"meta":{"tenant":"acme"}}
+{"id":"ev-3","sessionId":"sess-acme-001","source":"tool","ts":1791871928927,"seq":3,"payload":{"tool_name":"shell","result":{"stdout":"LICENSE\nREADME.md\nsrc/\n"}}}
+{"id":"ev-4","sessionId":"sess-beta-002","source":"tool","ts":1791871928928,"seq":1,"payload":{"tool_name":"delete_database","args":{"table":"users"}},"meta":{"tenant":"beta-corp"}}
+{"id":"safety-1791871928928-mp0u0u","sessionId":"safety","source":"meta","ts":1791871928928,"seq":0,"payload":{"kind":"tool-overreach","detail":"tool \"delete_database\" not in whitelist for tenant \"acme\"","ts":1791871928928,"severity":"block"}}
+{"__seal":true,"index":5,"prev":"a3bc733fc2bfcbaf366575443b4aa20abf55419f8dad920d7a161ea49571bb37","root":"17941bab84337b2d85b45ae59e38d9f4735d1f87a02ef277119854f370770f40","rowCount":5,"ts":1791871928947}
