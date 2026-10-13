@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * @cordishub/cli · 主入口
  *
@@ -16,6 +17,9 @@
  *   cordishub --help
  */
 import { CordishubService } from '../../core/src/service.ts'
+import { renderGenome, saveGenome } from '../../core/src/genome.ts'
+import { startRpcServer } from '../../core/src/rpc.ts'
+import { syncHubTopic, githubTopicFetcher } from '../../core/src/hubsync.ts'
 import * as path from 'node:path'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
@@ -70,7 +74,7 @@ function parseArgs(argv: string[]): { cmd: string[]; flags: Argv; rest: string[]
 
 // --------- 简易 Help / Banner ---------
 const HELP = `
-${c.cyan}${c.bold}CordisHub CLI${c.reset} ${c.dim}v0.1.0${c.reset}
+${c.cyan}${c.bold}CordisHub CLI${c.reset} ${c.dim}v0.9.0${c.reset}
 ${c.dim}DeepSeek · 一站式工作台 / 插件市场 / 会话回放 / 成本仪表盘${c.reset}
 
 ${c.bold}用法${c.reset}:
@@ -80,6 +84,15 @@ ${c.bold}用法${c.reset}:
   ${c.green}cordishub cost${c.reset}    [--session ID] [--json]  成本仪表盘
   ${c.green}cordishub search${c.reset}  <query> [--limit N]      跨 session 全文搜索
   ${c.green}cordishub safety review${c.reset}                     安全审计
+  ${c.green}cordishub genome${c.reset}  <session-id>             提取会话基因型（G0）
+  ${c.green}cordishub audit${c.reset}                            哈希链防篡改审计（L0）
+  ${c.green}cordishub cassette${c.reset} <session-id>            录制/检查回放盒带（L1）
+  ${c.green}cordishub record-demo${c.reset}                       录制演示会话（CLI 数据注入）
+  ${c.green}cordishub serve${c.reset} [--port N]                 JSON-RPC 内核服务（L4）
+  ${c.green}cordishub hub-sync${c.reset} [--topic T] [--token T]    GitHub topic 插件索引同步
+${c.dim}  全局：--db <path> 指向任意 cordishub JSONL 存储（默认 ~/.local/share/cordishub）${c.reset}
+  ${c.green}cordishub compact${c.reset}                           压实存储（每 id 保留最新行）
+  ${c.green}cordishub rebuild${c.reset}                           从磁盘日志重建内存投影
   ${c.green}cordishub dashboard${c.reset} [--output PATH]        生成 HTML 仪表盘
   ${c.green}cordishub tui${c.reset}                              终端交互 UI
   ${c.green}cordishub --help${c.reset}                           显示帮助
@@ -98,7 +111,7 @@ function printHelp(): void {
 }
 
 function banner(): void {
-  console.log(`${c.cyan}${c.bold}CordisHub${c.reset} ${c.dim}v0.1.0${c.reset} · DeepSeek 工作台`)
+  console.log(`${c.cyan}${c.bold}CordisHub${c.reset} ${c.dim}v0.9.0${c.reset} · DeepSeek 工作台`)
 }
 
 // --------- 共享：建立 storage <sessionId> ---------
@@ -107,22 +120,26 @@ function defaultDbPath(): string {
   return path.join(xdg, 'cordishub', 'cordishub.jsonl')
 }
 
-async function loadCore(dbPath?: string): Promise<CordishubService> {
-  // Mock 上下文：CLI 不在 DSH 内运行，但要让 service 能初始化、跑。
-  // 关键：ctx.set/get 引用独立对象，杜绝在 install 时递归。
-  const ctxStore: Record<string, unknown> = {}
+async function loadCore(dbPath?: string): Promise<{ core: CordishubService; ctx: any }> {
+  // 真事件总线：CLI 命令（如 record-demo）可以直接驱动 service 的完整链路
+  const listeners = new Map<string, Array<(...args: unknown[]) => void>>()
   const ctx = {
-    on: () => {},
+    on: (e: string, h: (...args: unknown[]) => void) => {
+      if (!listeners.has(e)) listeners.set(e, [])
+      listeners.get(e)!.push(h)
+    },
     off: () => {},
-    emit: () => {},
+    emit: (e: string, ...args: unknown[]) => {
+      for (const h of listeners.get(e) ?? []) h(...args)
+    },
     plugin: () => {},
-    set: (k: string, v: unknown) => { ctxStore[k] = v },
-    get: (k: string) => ctxStore[k],
+    set: () => {},
+    get: () => undefined,
   } as any
-  const svc = new CordishubService(ctx, { dbPath: dbPath ?? defaultDbPath() })
+  const svc = new CordishubService(ctx, { dbPath: dbPath ?? defaultDbPath(), silent: true })
   // 完整走 install：attachListeners 是 noop、hub.ingest 会载入 demo 数据
   svc.install()
-  return svc
+  return { core: svc, ctx }
 }
 
 // --------- 子命令实现 ---------
@@ -139,7 +156,7 @@ async function cmdHub(core: CordishubService, query: string, flags: Argv): Promi
   for (const h of hits) {
     const star = `${(h.stars ?? 0).toLocaleString()}★`
     const tag = h.official ? `${c.green}官方${c.reset}` : `${c.gray}社区${c.reset}`
-    console.log(`  ${c.cyan}${star.padEnd(10)}${c.reset} ${tag}  ${c.bold}${h.fullName ?? h.full_name ?? ''}${c.reset}`)
+    console.log(`  ${c.cyan}${star.padEnd(10)}${c.reset} ${tag}  ${c.bold}${h.fullName}${c.reset}`)
     console.log(`  ${' '.repeat(10)} ${c.dim}${h.description ?? ''}${c.reset}`)
     if (h.tags?.length) {
       console.log(`  ${' '.repeat(10)} ${c.magenta}${h.tags.map((t: string) => `#${t}`).join(' ')}${c.reset}`)
@@ -239,8 +256,118 @@ async function cmdSafety(core: CordishubService, flags: Argv): Promise<void> {
   }
   for (const e of events) {
     const sev = e.severity === 'block' ? c.red : e.severity === 'warn' ? c.yellow : c.gray
-    console.log(`  ${sev}[${e.severity.padEnd(5)}]${c.reset} ${c.dim}${e.source}${c.reset}  ${e.kind}: ${e.detail}`)
+    console.log(`  ${sev}[${e.severity.padEnd(5)}]${c.reset}  ${e.kind}: ${e.detail}`)
   }
+}
+
+async function cmdGenome(core: CordishubService, sessionId: string): Promise<void> {
+  banner()
+  const g = core.extractGenome(sessionId)
+  if (!g) {
+    console.log(`${c.yellow}session 不存在，或没有任何可提取的事件${c.reset}`)
+    return
+  }
+  const hash = saveGenome(core.storage, g)
+  console.log(`${c.dim}已存入基因库（指纹 = KV 键）:${c.reset} ${c.cyan}${hash.slice(0, 16)}…${c.reset}\n`)
+  for (const line of renderGenome(g)) console.log(`  ${line}`)
+  console.log(`\n${c.dim}育种示例：service.breed('${sessionId}', [{ kind: 'model-swap', model: 'deepseek-v4-flash' }])${c.reset}`)
+}
+
+async function cmdAudit(core: CordishubService): Promise<void> {
+  banner()
+  core.storage.sealNow()
+  const reports = core.storage.verifyChains()
+  let allOk = true
+  for (const r of reports) {
+    const mark = r.ok ? `${c.green}✓${c.reset}` : `${c.red}✗${c.reset}`
+    const name = r.file.split(/[\\/]/).pop()
+    console.log(`  ${mark} ${name}  seals=${r.seals} rows=${r.rows} head=${r.head.slice(0, 16)}…${r.error ? `  ${c.red}${r.error}${c.reset}` : ''}`)
+    if (!r.ok) allOk = false
+  }
+  console.log(`\n${c.dim}把 head 导出保存到外部（备份/打印）即锚定整条链——重写整条链的攻击也会改变 head。${c.reset}`)
+  if (!allOk) process.exit(1)
+}
+
+async function cmdCassette(core: CordishubService, sessionId: string): Promise<void> {
+  banner()
+  const tape = core.recordTape(sessionId)
+  if (!tape) {
+    console.log(`${c.yellow}session 不存在${c.reset}`)
+    return
+  }
+  const counts: Record<string, number> = {}
+  for (const e of tape.entries) counts[e.kind] = (counts[e.kind] ?? 0) + 1
+  console.log(`  entries=${tape.entries.length}  ${JSON.stringify(counts)}`)
+  console.log(`  determinism: tools=${tape.determinism.toolsRecorded}  sampling=${tape.determinism.samplingRecorded}  time=${tape.determinism.timeRecorded}`)
+  if (!tape.determinism.samplingRecorded) {
+    console.log(`\n${c.dim}未录到采样参数 → 上下文确定性（工具响应可重放）；接入方在 model 事件${c.reset}`)
+    console.log(`${c.dim}payload.sampling 里记录 seed/temperature 后即具备完整反事实语义。${c.reset}`)
+  }
+}
+
+async function cmdRecordDemo(ctx: any): Promise<void> {
+  banner()
+  const now = Date.now()
+  const sid = 'sess-demo-001'
+  ctx.emit('session/started', { id: sid, startedAt: now, model: 'deepseek-v4-pro', totalTokens: 0, totalCost: 0, meta: { tenant: 'demo' } })
+  ctx.emit('context/injection', { id: 'd1', sessionId: sid, source: 'system', ts: now, seq: 1, payload: { text: 'You are a demo assistant for CordisHub CLI.' } })
+  ctx.emit('context/injection', { id: 'd2', sessionId: sid, source: 'user', ts: now, seq: 2, payload: { text: 'List the billing files.' } })
+  ctx.emit('tool/called', { id: 'd3-call', sessionId: sid, source: 'tool', ts: now, seq: 3, toolCallId: 'td1', payload: { tool_name: 'shell', arguments: { cmd: 'ls src/billing' } } })
+  ctx.emit('tool/result', { id: 'd3-result', sessionId: sid, source: 'tool', ts: now, seq: 4, toolCallId: 'td1', payload: { tool_name: 'shell', result: { stdout: 'invoice.ts payment.ts refund.ts' } } })
+  ctx.emit('model/response', { id: 'd5', sessionId: sid, source: 'model', ts: now, seq: 5, model: 'deepseek-v4-pro', tokens: { prompt: 900, completion: 120, total: 1020 }, payload: { text: 'Found three billing files: invoice, payment and refund.' } })
+  ctx.emit('session/ended', sid, now + 10)
+  console.log(`${c.green}✓${c.reset} 演示会话已录制: ${c.bold}${sid}${c.reset}`)
+  console.log(`${c.dim}试试: cordishub genome ${sid} · cordishub cassette ${sid} · cordishub replay ${sid}${c.reset}`)
+}
+
+async function cmdServe(core: CordishubService, flags: Argv): Promise<void> {
+  const port = Number(flags.port ?? 8321)
+  const handle = await startRpcServer(core, { port })
+  banner()
+  console.log(`${c.green}✓${c.reset} JSON-RPC 内核服务: ${c.cyan}http://127.0.0.1:${handle.port}${c.reset}`)
+  console.log(`\n${c.bold}方法表${c.reset}:`)
+  const methods = [
+    'service.info', 'sessions.list', 'cost.breakdown', 'hub.search',
+    'search.fulltext', 'safety.history', 'replay.session',
+    'genome.extract', 'genome.library', 'genome.fitness',
+    'cassette.inspect', 'taint.scan', 'audit.chains', 'budget.snapshot',
+  ]
+  for (const m of methods) console.log(`  ${c.green}${m}${c.reset}`)
+  console.log(`\n${c.dim}示例: curl -s -X POST http://127.0.0.1:${handle.port} -H "content-type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"hub.search","params":{"query":"review"}}'${c.reset}`)
+  console.log(`${c.dim}Ctrl+C 退出。${c.reset}`)
+  await new Promise<never>(() => {}) // 保持运行直至 SIGINT
+}
+
+async function cmdHubSync(core: CordishubService, flags: Argv): Promise<void> {
+  banner()
+  const topic = typeof flags.topic === 'string' ? flags.topic : 'dsh-plugin'
+  const token = typeof flags.token === 'string' ? flags.token : process.env['GITHUB_TOKEN']
+  try {
+    const n = await syncHubTopic(core.hub, { fetcher: githubTopicFetcher(token), topic })
+    console.log(`  ${c.green}✓${c.reset} 已同步 ${c.bold}${n}${c.reset} 个仓库（topic: ${topic}）`)
+    if (n === 0) {
+      console.log(`  ${c.yellow}该 topic 暂无仓库——管道就绪，真实生态出现即可入库。${c.reset}`)
+    }
+  } catch (err) {
+    console.error(`${c.red}error:${c.reset} ${(err as Error).message}`)
+    process.exit(1)
+  }
+}
+
+async function cmdCompact(core: CordishubService): Promise<void> {
+  banner()
+  const result = core.storage.compact()
+  for (const r of result) {
+    console.log(`  ${c.green}✓${c.reset} ${r.file} → ${r.rows} rows`)
+  }
+  console.log(`\n${c.dim}压实后每个 id 仅保留最新行，append 历史收敛，长会话不再 O(n²) 膨胀。${c.reset}`)
+}
+
+async function cmdRebuild(core: CordishubService): Promise<void> {
+  banner()
+  core.storage.rebuild()
+  console.log(`${c.green}✓${c.reset} 内存投影已从磁盘日志重建（sessions / events / checkpoints / kv + FTS 索引）`)
+  console.log(`${c.dim}日志是唯一真相：任何投影损坏都可以用它恢复。${c.reset}`)
 }
 
 async function cmdDashboard(core: CordishubService, flags: Argv): Promise<void> {
@@ -283,7 +410,8 @@ async function main(): Promise<void> {
   }
 
   const [top, sub, ...rest_] = cmd
-  const core = await loadCore()
+  const dbFlag = typeof flags.db === 'string' ? flags.db : undefined
+  const { core, ctx } = await loadCore(dbFlag)
 
   try {
     switch (top) {
@@ -334,6 +462,46 @@ async function main(): Promise<void> {
         }
         break
       }
+      case 'compact': {
+        await cmdCompact(core)
+        break
+      }
+      case 'genome': {
+        if (!sub) {
+          console.error(`${c.red}error:${c.reset} cordishub genome <session-id>`)
+          process.exit(1)
+        }
+        await cmdGenome(core, sub)
+        break
+      }
+      case 'rebuild': {
+        await cmdRebuild(core)
+        break
+      }
+      case 'audit': {
+        await cmdAudit(core)
+        break
+      }
+      case 'cassette': {
+        if (!sub) {
+          console.error(`${c.red}error:${c.reset} cordishub cassette <session-id>`)
+          process.exit(1)
+        }
+        await cmdCassette(core, sub)
+        break
+      }
+      case 'record-demo': {
+        await cmdRecordDemo(ctx)
+        break
+      }
+      case 'serve': {
+        await cmdServe(core, flags)
+        break
+      }
+      case 'hub-sync': {
+        await cmdHubSync(core, flags)
+        break
+      }
       case 'dashboard': {
         await cmdDashboard(core, flags)
         break
@@ -345,7 +513,7 @@ async function main(): Promise<void> {
       case 'version':
       case '--version':
       case '-v': {
-        console.log('cordishub v0.1.0')
+        console.log('cordishub v0.9.0')
         break
       }
       default: {
