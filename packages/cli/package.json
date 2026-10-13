@@ -1,6 +1,6 @@
 {
   "name": "@cordishub/cli",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "CordisHub terminal companion — search plugins, watch cost, replay sessions.",
   "type": "module",
   "main": "./src/index.ts",

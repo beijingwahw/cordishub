@@ -78,3 +78,44 @@ export async function syncHubTopic(
   }
   return count;
 }
+
+/**
+ * 多 topic 同步：按 topic 依次分页拉取，标签记录来源 topic
+ * （`github-topic:<t>`），跨 topic 的同名仓库按 fullName 自然去重（KV upsert）。
+ * 返回按 topic 的计数（fetched 口径），索引内的唯一数以 hub.search 为准。
+ */
+export async function syncHubTopics(
+  hub: HubIndex,
+  opts: {
+    fetcher: RepoFetcher;
+    topics: string[];
+    maxPages?: number;
+    perPage?: number;
+    onProgress?: (topic: string, fetched: number) => void;
+  },
+): Promise<{ total: number; byTopic: Record<string, number> }> {
+  const perPage = opts.perPage ?? 100;
+  const maxPages = opts.maxPages ?? 3;
+  const byTopic: Record<string, number> = {};
+  let total = 0;
+  for (const topic of opts.topics) {
+    let fetched = 0;
+    for (let page = 1; page <= maxPages; page++) {
+      const repos = await opts.fetcher(topic, perPage, page);
+      if (repos.length === 0) break;
+      hub.ingest(
+        repos.map((r) => {
+          const meta = toPluginMeta(r);
+          meta.tags = [`github-topic:${topic}`];
+          return meta;
+        }),
+      );
+      fetched += repos.length;
+      if (repos.length < perPage) break;
+    }
+    byTopic[topic] = fetched;
+    total += fetched;
+    opts.onProgress?.(topic, fetched);
+  }
+  return { total, byTopic };
+}

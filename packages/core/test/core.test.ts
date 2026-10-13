@@ -48,7 +48,7 @@ import { runReactor, evolve, seededRng } from '../src/reactor.ts';
 import { certifyDeterminism, stampSampling, locateBadEvents } from '../src/cassette.ts';
 import { taintScan, cacheTaintCompatible, tenantTaintPolicy } from '../src/taint.ts';
 import { selectParents, genomeDistance, type ReactorRun } from '../src/reactor.ts';
-import { syncHubTopic, type RepoFetcher } from '../src/hubsync.ts';
+import { syncHubTopic, syncHubTopics, type RepoFetcher } from '../src/hubsync.ts';
 import { HubIndex, DEMO_PLUGINS } from '../src/hub.ts';
 import { SafetyNet } from '../src/safety.ts';
 import { CordishubService } from '../src/service.ts';
@@ -1338,5 +1338,34 @@ test('hubsync · GitHub topic 管道：mock fetcher → 映射 → 可搜索（�
   };
   assert.equal(await syncHubTopic(hub, { fetcher: pagedFetcher, maxPages: 5, perPage: 2 }), 2);
   assert.equal(pages, 2, '满页翻页、空页即停，不空转');
+  s.close();
+});
+
+// ---------- v0.10 · 多 topic 真实索引 ----------
+
+test('hubsync · 多 topic 同步：来源标签 + 跨 topic 去重', async () => {
+  const db = tmpDb('hubsync2');
+  const s = new Storage({ path: db, silent: true });
+  const hub = new HubIndex(s);
+  const mk = (full: string, stars: number): import('../src/hubsync.ts').GithubRepo => ({
+    full_name: full,
+    description: `plugin ${full}`,
+    stargazers_count: stars,
+    html_url: `https://github.com/${full}`,
+    pushed_at: '2026-10-01T00:00:00Z',
+    owner: { login: full.split('/')[0]! },
+    license: null,
+  });
+  const fetcher: RepoFetcher = async (topic) =>
+    topic === 'alpha' ? [mk('acme/shared', 100), mk('acme/only-a', 50)] : [mk('acme/shared', 100), mk('acme/only-b', 60)];
+
+  const r = await syncHubTopics(hub, { fetcher, topics: ['alpha', 'beta'] });
+  assert.equal(r.byTopic['alpha'], 2);
+  assert.equal(r.byTopic['beta'], 2);
+  assert.equal(r.total, 4);
+  const unique = hub.search({ limit: 100 });
+  assert.equal(unique.length, 3, '跨 topic 同名仓库按 fullName 去重');
+  const shared = unique.find((p) => p.fullName === 'acme/shared')!;
+  assert.deepEqual(shared.tags, ['github-topic:beta'], '后写 topic 的标签覆盖（最新来源）');
   s.close();
 });

@@ -1,6 +1,6 @@
 {
   "name": "@cordishub/core",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "CordisHub core — the meta-plugin that turns DeepSeek Harness into a workstation: plugin hub, replay lab, cost console, safety net.",
   "license": "MIT",
   "type": "module",

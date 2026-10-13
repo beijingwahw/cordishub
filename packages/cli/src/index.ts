@@ -19,7 +19,7 @@
 import { CordishubService } from '../../core/src/service.ts'
 import { renderGenome, saveGenome } from '../../core/src/genome.ts'
 import { startRpcServer } from '../../core/src/rpc.ts'
-import { syncHubTopic, githubTopicFetcher } from '../../core/src/hubsync.ts'
+import { syncHubTopic, syncHubTopics, githubTopicFetcher } from '../../core/src/hubsync.ts'
 import * as path from 'node:path'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
@@ -74,7 +74,7 @@ function parseArgs(argv: string[]): { cmd: string[]; flags: Argv; rest: string[]
 
 // --------- 简易 Help / Banner ---------
 const HELP = `
-${c.cyan}${c.bold}CordisHub CLI${c.reset} ${c.dim}v0.9.0${c.reset}
+${c.cyan}${c.bold}CordisHub CLI${c.reset} ${c.dim}v0.10.0${c.reset}
 ${c.dim}DeepSeek · 一站式工作台 / 插件市场 / 会话回放 / 成本仪表盘${c.reset}
 
 ${c.bold}用法${c.reset}:
@@ -111,7 +111,7 @@ function printHelp(): void {
 }
 
 function banner(): void {
-  console.log(`${c.cyan}${c.bold}CordisHub${c.reset} ${c.dim}v0.9.0${c.reset} · DeepSeek 工作台`)
+  console.log(`${c.cyan}${c.bold}CordisHub${c.reset} ${c.dim}v0.10.0${c.reset} · DeepSeek 工作台`)
 }
 
 // --------- 共享：建立 storage <sessionId> ---------
@@ -340,13 +340,21 @@ async function cmdServe(core: CordishubService, flags: Argv): Promise<void> {
 
 async function cmdHubSync(core: CordishubService, flags: Argv): Promise<void> {
   banner()
-  const topic = typeof flags.topic === 'string' ? flags.topic : 'dsh-plugin'
+  const topicFlag = typeof flags.topic === 'string' ? flags.topic : 'dsh-plugin'
+  const topics = topicFlag.split(',').map((t) => t.trim()).filter(Boolean)
   const token = typeof flags.token === 'string' ? flags.token : process.env['GITHUB_TOKEN']
+  const maxPages = flags.pages !== undefined ? Number(flags.pages) : 3
   try {
-    const n = await syncHubTopic(core.hub, { fetcher: githubTopicFetcher(token), topic })
-    console.log(`  ${c.green}✓${c.reset} 已同步 ${c.bold}${n}${c.reset} 个仓库（topic: ${topic}）`)
-    if (n === 0) {
-      console.log(`  ${c.yellow}该 topic 暂无仓库——管道就绪，真实生态出现即可入库。${c.reset}`)
+    const { total, byTopic } = await syncHubTopics(core.hub, {
+      fetcher: githubTopicFetcher(token),
+      topics,
+      maxPages,
+      onProgress: (t, n) => console.log(`  ${c.green}✓${c.reset} ${t.padEnd(28)} ${String(n).padStart(4)} repos`),
+    })
+    const unique = core.hub.search({ limit: 100000 }).length
+    console.log(`\n  fetched=${total}  unique-in-index=${c.bold}${unique}${c.reset}`)
+    if (total === 0) {
+      console.log(`  ${c.yellow}这些 topic 暂无仓库——管道就绪，真实生态出现即可入库。${c.reset}`)
     }
   } catch (err) {
     console.error(`${c.red}error:${c.reset} ${(err as Error).message}`)
@@ -513,7 +521,7 @@ async function main(): Promise<void> {
       case 'version':
       case '--version':
       case '-v': {
-        console.log('cordishub v0.9.0')
+        console.log('cordishub v0.10.0')
         break
       }
       default: {

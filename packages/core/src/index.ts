@@ -89,6 +89,7 @@ export {
   githubTopicFetcher,
   toPluginMeta,
   syncHubTopic,
+  syncHubTopics,
   type GithubRepo,
   type RepoFetcher,
 } from './hubsync.ts';

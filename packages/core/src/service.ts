@@ -39,7 +39,7 @@ import {
   type SelectionStrategy,
 } from './reactor.ts';
 import { taintScan, type TaintPolicy, type TaintReport } from './taint.ts';
-import { syncHubTopic, githubTopicFetcher } from './hubsync.ts';
+import { syncHubTopic, syncHubTopics, githubTopicFetcher } from './hubsync.ts';
 import {
   extractGenomeFromSession,
   mutate,
@@ -552,6 +552,26 @@ export class CordishubService {
       fetcher: githubTopicFetcher(opts.token),
       topic: opts.topic,
       maxPages: opts.maxPages,
+    });
+  }
+
+  /**
+   * v0.10 · 多 topic 真实索引：按 topic 依次同步，标签记录来源，
+   * 同名仓库按 fullName 去重。返回按 topic 计数（fetched 口径）。
+   */
+  async syncHubTopics(
+    opts: {
+      token?: string;
+      topics: string[];
+      maxPages?: number;
+      onProgress?: (topic: string, fetched: number) => void;
+    } = { topics: ['dsh-plugin'] },
+  ): Promise<{ total: number; byTopic: Record<string, number> }> {
+    return syncHubTopics(this.hub, {
+      fetcher: githubTopicFetcher(opts.token),
+      topics: opts.topics,
+      maxPages: opts.maxPages,
+      onProgress: opts.onProgress,
     });
   }
 

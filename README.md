@@ -223,6 +223,14 @@ node --experimental-strip-types --no-warnings --test test/
 
 ---
 
+## v0.10 Plugin Hub 真实索引（已落地）
+
+- **真实生态接通**：`cordishub hub-sync --topic "dsh-plugin,mcp-server,model-context-protocol" --token <ghp_…>` 一次同步三个 topic——实测抓取 900 个真实仓库、去重后 **835 个插件**入 KV 索引（volcengine/OpenViking 39,780★ 等）；
+- **多 topic 同步**：`syncHubTopics()` 按 topic 依次分页拉取，标签记录来源（`github-topic:<t>`），同名仓库按 fullName 去重；
+- **千行级验证**：835 条索引跨进程持久化（新进程 `hub "database"` 直接命中），Merkle 链在 955 行 / 20 封印规模下审计全绿。
+
+---
+
 ## 用户故事
 
 ### 用户 A：DSH 重度用户
@@ -267,8 +275,9 @@ Replay Lab 打开 run #42，time-travel 到第 12 步，diff 第 12-17 步的所
 - [x] v0.6 进化反应堆（G1）：变体跑批 + 预算燃料闸门 + 适应度选择
 - [x] v0.7 内核增强：taint 信息流检查 + 选择策略 DSL + 可复现世代进化
 - [x] v0.8 JSON-RPC 内核桥（L4 开篇）：统一方法表 + 策略数据化
-- [x] v0.9 内核收尾：内核巡礼 quickstart + 设计文档入库 + Hub 数据源管道（**当前位置**）
-- [ ] v1.0 Plugin Hub 语义索引（管道已就绪，待真实生态）· Replay Lab UI · Tauri 桌面 · G3/G4（激活条件见 docs/DESIGN.md）（G4）
+- [x] v0.9 内核收尾：内核巡礼 quickstart + 设计文档入库 + Hub 数据源管道
+- [x] v0.10 Plugin Hub 真实索引：多 topic 同步，835 个真实插件入库（**当前位置**）
+- [ ] v1.0 Replay Lab UI · Tauri 桌面 · G3/G4（激活条件见 docs/DESIGN.md）（G4）
 
 ---
 
